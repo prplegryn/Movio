@@ -506,66 +506,40 @@ private fun BottomChrome(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .drawBackdrop(
-                    backdrop = backdrop,
-                    shape = { RoundedCornerShape(32.dp) },
-                    effects = {
-                        vibrancy()
-                        blur(8.dp.toPx())
-                        lens(22.dp.toPx(), 28.dp.toPx())
-                    },
-                    onDrawSurface = {
-                        drawRect(Color.White.copy(alpha = 0.54f))
-                    },
+        LiquidBottomTabs(
+            selectedTabIndex = { selected.ordinal },
+            onTabSelected = { index ->
+                onSelected(
+                    when (index) {
+                        0 -> Destination.Play
+                        1 -> Destination.Library
+                        else -> Destination.Mine
+                    }
                 )
-                .padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
+            },
+            backdrop = backdrop,
+            tabsCount = 3,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
         ) {
-            NavButton(
-                glyph = Glyph.Play,
-                selected = selected == Destination.Play,
-                contentDescription = "Play",
-                onClick = { onSelected(Destination.Play) },
-            )
-            NavButton(
-                glyph = Glyph.Library,
-                selected = selected == Destination.Library,
-                contentDescription = "库",
-                onClick = { onSelected(Destination.Library) },
-            )
-            NavButton(
-                glyph = Glyph.Mine,
-                selected = selected == Destination.Mine,
-                contentDescription = "我的",
-                onClick = { onSelected(Destination.Mine) },
-            )
+            LiquidBottomTab(onClick = { onSelected(Destination.Play) }) {
+                GlyphIcon(Glyph.Play, Ink, Modifier.size(27.dp))
+            }
+            LiquidBottomTab(onClick = { onSelected(Destination.Library) }) {
+                GlyphIcon(Glyph.Library, Ink, Modifier.size(27.dp))
+            }
+            LiquidBottomTab(onClick = { onSelected(Destination.Mine) }) {
+                GlyphIcon(Glyph.Mine, Ink, Modifier.size(27.dp))
+            }
         }
 
-        Box(
-            Modifier
-                .fillMaxHeight()
-                .aspectRatio(1f)
-                .drawBackdrop(
-                    backdrop = backdrop,
-                    shape = { CircleShape },
-                    effects = {
-                        vibrancy()
-                        blur(8.dp.toPx())
-                        lens(22.dp.toPx(), 28.dp.toPx())
-                    },
-                    onDrawSurface = {
-                        drawRect(Accent.copy(alpha = 0.86f))
-                    },
-                )
-                .noRippleClickable(onSearch),
-            contentAlignment = Alignment.Center,
+        LiquidCircleIconButton(
+            onClick = onSearch,
+            backdrop = backdrop,
+            modifier = Modifier.size(64.dp),
         ) {
-            GlyphIcon(Glyph.Search, Color.White, Modifier.size(26.dp))
+            GlyphIcon(Glyph.Search, Accent, Modifier.size(26.dp))
         }
     }
 }
