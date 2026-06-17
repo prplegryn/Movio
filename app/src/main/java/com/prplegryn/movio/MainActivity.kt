@@ -8,7 +8,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -35,7 +34,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -88,6 +86,7 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.prplegryn.movio.data.MediaGroup
+import com.prplegryn.movio.data.MediaKind
 import com.prplegryn.movio.data.MovioController
 import com.prplegryn.movio.ui.LibrarySearchResults
 import com.prplegryn.movio.ui.MediaDetailOverlay
@@ -190,6 +189,13 @@ private fun MovioApp() {
                 onClose = { controller.closeDetail() },
             )
         }
+
+        if (controller.message.isErrorMessage()) {
+            AppErrorDialog(
+                message = controller.message,
+                onDismiss = { controller.dismissMessage() },
+            )
+        }
     }
 }
 
@@ -241,47 +247,88 @@ private fun PlayContent(
         contentPadding = PaddingValues(top = 104.dp, bottom = 112.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        if (controller.library.isNotEmpty()) {
+        val movies = controller.library.filter { it.kind == MediaKind.Movie && it.tmdb != null }
+        val tvShows = controller.library.filter { it.kind == MediaKind.Tv && it.tmdb != null }
+        val others = controller.library.filter { it.kind == MediaKind.Unknown }
+        val continueWatching = controller.library.filter {
+            ((it.movieFile?.playProgressMs
+                ?: it.episodes.maxOfOrNull { ep -> ep.video.playProgressMs }
+                ?: it.unmatchedFiles.maxOfOrNull { file -> file.playProgressMs }
+                ?: 0L) > 0L)
+        }
+        if (controller.library.isEmpty()) {
             item {
-                LibraryShortcutSection(
-                    title = "继续观看",
-                    groups = controller.library.filter {
-                        ((it.movieFile?.playProgressMs
-                            ?: it.episodes.maxOfOrNull { ep -> ep.video.playProgressMs }
-                            ?: 0L) > 0L)
-                    }.ifEmpty { controller.library.take(8) },
-                    controller = controller,
-                    onOpen = onOpen,
-                )
+                EmptyPlayState()
             }
-            item {
-                LibraryShortcutSection(
-                    title = "资源库",
-                    groups = controller.library.take(12),
-                    controller = controller,
-                    onOpen = onOpen,
-                )
+        } else {
+            if (continueWatching.isNotEmpty()) {
+                item {
+                    LibraryShortcutSection(
+                        title = "继续观看",
+                        groups = continueWatching,
+                        controller = controller,
+                        onOpen = onOpen,
+                    )
+                }
+            }
+            if (movies.isNotEmpty()) {
+                item {
+                    LibraryShortcutSection(
+                        title = "电影",
+                        groups = movies,
+                        controller = controller,
+                        onOpen = onOpen,
+                    )
+                }
+            }
+            if (tvShows.isNotEmpty()) {
+                item {
+                    LibraryShortcutSection(
+                        title = "电视剧",
+                        groups = tvShows,
+                        controller = controller,
+                        onOpen = onOpen,
+                    )
+                }
+            }
+            if (others.isNotEmpty()) {
+                item {
+                    LibraryShortcutSection(
+                        title = "其他",
+                        groups = others,
+                        controller = controller,
+                        onOpen = onOpen,
+                    )
+                }
+            }
+            if (movies.isEmpty() && tvShows.isEmpty() && others.isEmpty()) {
+                item {
+                    EmptyPlayState(
+                        title = "还没有影视库条目",
+                        body = "请在“我的”里同步资源库，匹配成功的电影和电视剧会显示在这里。",
+                    )
+                }
             }
         }
-        item {
-            CoverSection(
-                title = "最近观看",
-                covers = recentCovers,
-                wide = true,
-            )
-        }
-        item {
-            CoverSection("电影", movieCovers, wide = false)
-        }
-        item {
-            CoverSection("电视剧", seriesCovers, wide = false)
-        }
-        item {
-            CoverSection("其他", otherCovers, wide = false)
-        }
-        item {
-            CoverSection("分类", categoryCovers, wide = false)
-        }
+    }
+}
+
+@Composable
+private fun EmptyPlayState(
+    title: String = "还没有同步资源库",
+    body: String = "在“我的”里登录光鸭、选择根目录、配置 TMDb Read Access Token 后同步。",
+) {
+    Column(
+        Modifier
+            .padding(horizontal = 20.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color.White.copy(alpha = 0.68f))
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        BasicText(title, style = TextStyle(Ink, 19.sp, FontWeight.Bold))
+        BasicText(body, style = TextStyle(MutedInk, 14.sp))
     }
 }
 
@@ -329,7 +376,7 @@ private fun LibraryShortcutSection(
                         if (poster.isNotBlank()) {
                             AsyncImage(model = poster, contentDescription = null, modifier = Modifier.fillMaxSize())
                         } else {
-                            BasicText("Movio", style = TextStyle(MutedInk, 12.sp, FontWeight.Bold))
+                            BasicText("其他", style = TextStyle(MutedInk, 12.sp, FontWeight.Bold))
                         }
                     }
                     BasicText(
@@ -338,6 +385,64 @@ private fun LibraryShortcutSection(
                         overflow = TextOverflow.Ellipsis,
                         style = TextStyle(Ink, 13.sp, FontWeight.Bold),
                     )
+                    BasicText(
+                        group.playSubtitle(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = TextStyle(MutedInk, 12.sp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun MediaGroup.playSubtitle(): String =
+    when (kind) {
+        MediaKind.Movie -> "电影"
+        MediaKind.Tv -> "${episodes.size} 集"
+        MediaKind.Unknown -> "${unmatchedFiles.size} 个未匹配"
+    }
+
+private fun String.isErrorMessage(): Boolean =
+    contains("失败") || contains("无法") || contains("没有") || contains("请先")
+
+@Composable
+private fun AppErrorDialog(
+    message: String,
+    onDismiss: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .zIndex(20f)
+            .background(Color.Black.copy(alpha = 0.26f))
+            .noRippleClickable(onDismiss),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 28.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color.White)
+                .noRippleClickable {}
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            BasicText("操作失败", style = TextStyle(Ink, 20.sp, FontWeight.Bold))
+            BasicText(message, style = TextStyle(MutedInk, 14.sp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Box(
+                    Modifier
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Accent)
+                        .noRippleClickable(onDismiss)
+                        .padding(horizontal = 18.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    BasicText("知道了", style = TextStyle(Color.White, 14.sp, FontWeight.Bold))
                 }
             }
         }
@@ -383,7 +488,6 @@ private fun PlayTopBar(
         )
     }
 }
-
 @Composable
 private fun MenuBackdrop(
     visible: Boolean,
@@ -496,123 +600,6 @@ private fun MultiSelectMenu(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CoverSection(
-    title: String,
-    covers: List<CoverItem>,
-    wide: Boolean,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        BasicText(
-            text = title,
-            style = TextStyle(
-                color = Ink,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-            ),
-            modifier = Modifier.padding(horizontal = 20.dp),
-        )
-
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            contentPadding = PaddingValues(horizontal = 20.dp),
-        ) {
-            items(covers) { cover ->
-                CoverCard(cover = cover, wide = wide)
-            }
-        }
-    }
-}
-
-@Composable
-private fun CoverCard(
-    cover: CoverItem,
-    wide: Boolean,
-) {
-    val width = if (wide) 224.dp else 112.dp
-    val aspectRatio = if (wide) 16f / 9f else 9f / 16f
-    Column(
-        modifier = Modifier.width(width),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(aspectRatio)
-                .clip(RoundedCornerShape(if (wide) 18.dp else 16.dp))
-                .background(Brush.linearGradient(cover.colors)),
-        ) {
-            Canvas(Modifier.fillMaxSize()) {
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.24f),
-                    radius = size.minDimension * 0.38f,
-                    center = Offset(size.width * 0.18f, size.height * 0.16f),
-                )
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.14f),
-                    radius = size.minDimension * 0.52f,
-                    center = Offset(size.width * 0.92f, size.height * 0.88f),
-                )
-                drawRoundRect(
-                    color = Color.White.copy(alpha = 0.10f),
-                    topLeft = Offset(size.width * 0.08f, size.height * 0.72f),
-                    size = Size(size.width * 0.46f, size.height * 0.12f),
-                    cornerRadius = CornerRadius(20f, 20f),
-                )
-            }
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.Transparent,
-                                Color.Black.copy(alpha = if (wide) 0.26f else 0.34f),
-                            )
-                        )
-                    )
-            )
-        }
-
-        BasicText(
-            text = cover.title,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = TextStyle(
-                color = Ink,
-                fontSize = if (wide) 15.sp else 14.sp,
-                fontWeight = FontWeight.Medium,
-            ),
-        )
-    }
-}
-
-@Composable
-private fun TitlePage(title: String) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFFF7F3EB), Color(0xFFEAF0F4))
-                )
-            )
-            .padding(horizontal = 24.dp)
-    ) {
-        BasicText(
-            text = title,
-            style = TextStyle(
-                color = Ink,
-                fontSize = 34.sp,
-                fontWeight = FontWeight.Bold,
-            ),
-            modifier = Modifier
-                .statusBarsPadding()
-                .padding(top = 18.dp),
-        )
-    }
-}
-
-@Composable
 private fun BottomChrome(
     selected: Destination,
     backdrop: Backdrop,
@@ -664,39 +651,6 @@ private fun BottomChrome(
         ) {
             GlyphIcon(Glyph.Search, Accent, Modifier.size(26.dp))
         }
-    }
-}
-
-@Composable
-private fun NavButton(
-    glyph: Glyph,
-    selected: Boolean,
-    contentDescription: String,
-    onClick: () -> Unit,
-) {
-    val progress by animateFloatAsState(
-        targetValue = if (selected) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.78f, stiffness = 300f),
-        label = "navSelection",
-    )
-    Box(
-        Modifier
-            .size(52.dp)
-            .clip(CircleShape)
-            .background(Accent.copy(alpha = 0.12f * progress))
-            .noRippleClickable(onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        GlyphIcon(
-            glyph = glyph,
-            tint = if (selected) Accent else Color(0xFF3F4247),
-            modifier = Modifier
-                .size(25.dp)
-                .graphicsLayer {
-                    scaleX = 1f + 0.08f * progress
-                    scaleY = 1f + 0.08f * progress
-                },
-        )
     }
 }
 
@@ -954,45 +908,3 @@ private fun Modifier.noRippleClickable(onClick: () -> Unit): Modifier = composed
         onClick = onClick,
     )
 }
-
-private data class CoverItem(
-    val title: String,
-    val colors: List<Color>,
-)
-
-private val recentCovers = listOf(
-    CoverItem("银河边境", listOf(Color(0xFF0F172A), Color(0xFF2F80ED), Color(0xFFFFD166))),
-    CoverItem("雨夜列车", listOf(Color(0xFF202124), Color(0xFF6C5CE7), Color(0xFF81ECEC))),
-    CoverItem("海岸来信", listOf(Color(0xFF155E75), Color(0xFFB8E1DD), Color(0xFFFFB703))),
-    CoverItem("午后剧场", listOf(Color(0xFF6D597A), Color(0xFFFFB4A2), Color(0xFF355070))),
-)
-
-private val movieCovers = listOf(
-    CoverItem("逆光飞行", listOf(Color(0xFF264653), Color(0xFF2A9D8F), Color(0xFFE9C46A))),
-    CoverItem("长街回声", listOf(Color(0xFF3A0CA3), Color(0xFFF72585), Color(0xFF4CC9F0))),
-    CoverItem("白昼烟火", listOf(Color(0xFF343A40), Color(0xFFF8961E), Color(0xFFF94144))),
-    CoverItem("第七频道", listOf(Color(0xFF073B4C), Color(0xFF06D6A0), Color(0xFFFFD166))),
-    CoverItem("静默山谷", listOf(Color(0xFF1B4332), Color(0xFF74C69D), Color(0xFFD8F3DC))),
-)
-
-private val seriesCovers = listOf(
-    CoverItem("城市样本", listOf(Color(0xFF14213D), Color(0xFFE5E5E5), Color(0xFFFCA311))),
-    CoverItem("北纬三十度", listOf(Color(0xFF03045E), Color(0xFF00B4D8), Color(0xFFCAF0F8))),
-    CoverItem("暗号计划", listOf(Color(0xFF3D405B), Color(0xFFE07A5F), Color(0xFFF2CC8F))),
-    CoverItem("日落档案", listOf(Color(0xFF5F0F40), Color(0xFFFB8B24), Color(0xFFE36414))),
-)
-
-private val otherCovers = listOf(
-    CoverItem("纪录短片", listOf(Color(0xFF0B132B), Color(0xFF5BC0BE), Color(0xFFFAF3DD))),
-    CoverItem("现场音乐", listOf(Color(0xFF432818), Color(0xFFFFE6A7), Color(0xFF99582A))),
-    CoverItem("动画精选", listOf(Color(0xFF7209B7), Color(0xFFB5179E), Color(0xFF4CC9F0))),
-    CoverItem("专题合集", listOf(Color(0xFF22577A), Color(0xFF38A3A5), Color(0xFFC7F9CC))),
-)
-
-private val categoryCovers = listOf(
-    CoverItem("动作", listOf(Color(0xFF9D0208), Color(0xFFFFBA08), Color(0xFF370617))),
-    CoverItem("科幻", listOf(Color(0xFF240046), Color(0xFF7B2CBF), Color(0xFF64DFDF))),
-    CoverItem("悬疑", listOf(Color(0xFF212529), Color(0xFFADB5BD), Color(0xFF495057))),
-    CoverItem("喜剧", listOf(Color(0xFF006D77), Color(0xFFFFDDD2), Color(0xFFE29578))),
-    CoverItem("家庭", listOf(Color(0xFF386641), Color(0xFFA7C957), Color(0xFFF2E8CF))),
-)

@@ -20,12 +20,14 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -43,6 +45,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.prplegryn.movio.data.CloudFolder
+import com.prplegryn.movio.data.CloudVideo
 import com.prplegryn.movio.data.LibraryEpisode
 import com.prplegryn.movio.data.MediaGroup
 import com.prplegryn.movio.data.MediaKind
@@ -60,6 +64,9 @@ fun MovioLibraryPage(
     onOpen: (MediaGroup) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val movies = controller.library.filter { it.kind == MediaKind.Movie && it.tmdb != null }
+    val tvShows = controller.library.filter { it.kind == MediaKind.Tv && it.tmdb != null }
+    val others = controller.library.filter { it.kind == MediaKind.Unknown }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -79,24 +86,39 @@ fun MovioLibraryPage(
             item {
                 EmptyPanel(
                     title = "还没有资源",
-                    body = "在“我的”里登录光鸭、设置根目录和 TMDb token 后同步资源库。",
+                    body = "在“我的”里登录光鸭、选择根目录、配置 TMDb Read Access Token 后同步资源库。",
                 )
             }
         } else {
-            items(controller.library.chunked(2)) { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    row.forEach { group ->
-                        MediaCard(
-                            group = group,
-                            controller = controller,
-                            modifier = Modifier.weight(1f),
-                            onOpen = { onOpen(group) },
-                        )
-                    }
-                    if (row.size == 1) {
-                        Spacer(Modifier.weight(1f))
-                    }
-                }
+            mediaSection("电影", movies, controller, onOpen)
+            mediaSection("电视剧", tvShows, controller, onOpen)
+            mediaSection("其他", others, controller, onOpen)
+        }
+    }
+}
+
+private fun LazyListScope.mediaSection(
+    title: String,
+    groups: List<MediaGroup>,
+    controller: MovioController,
+    onOpen: (MediaGroup) -> Unit,
+) {
+    if (groups.isEmpty()) return
+    item {
+        BasicText(title, style = TextStyle(Ink, 22.sp, FontWeight.Bold))
+    }
+    items(groups.chunked(2)) { row ->
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            row.forEach { group ->
+                MediaCard(
+                    group = group,
+                    controller = controller,
+                    modifier = Modifier.weight(1f),
+                    onOpen = { onOpen(group) },
+                )
+            }
+            if (row.size == 1) {
+                Spacer(Modifier.weight(1f))
             }
         }
     }
@@ -107,8 +129,14 @@ fun MovioMinePage(controller: MovioController) {
     val scope = rememberCoroutineScope()
     var phone by remember(controller.settings.guangya.phone) { mutableStateOf(controller.settings.guangya.phone.ifBlank { "+86 " }) }
     var code by remember { mutableStateOf("") }
-    var rootId by remember(controller.settings.rootId) { mutableStateOf(controller.settings.rootId) }
     var tmdbToken by remember(controller.settings.tmdbToken) { mutableStateOf(controller.settings.tmdbToken) }
+    val loggedIn = controller.loggedIn
+
+    LaunchedEffect(loggedIn) {
+        if (loggedIn && controller.rootFolders.isEmpty()) {
+            controller.refreshRootFolders()
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -121,36 +149,71 @@ fun MovioMinePage(controller: MovioController) {
 
         item {
             SettingsPanel(title = "光鸭云盘") {
-                StatusLine("登录状态", if (controller.settings.guangya.accessToken.isBlank()) "未登录" else "已登录 ${controller.settings.guangya.phone}")
-                LabeledInput("手机号", phone, onChange = { phone = it }, placeholder = "+86 13800138000")
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ActionChip("发送验证码", Modifier.weight(1f)) {
-                        scope.launch { controller.requestSms(phone) }
+                if (loggedIn) {
+                    StatusLine("登录账号", controller.settings.guangya.phone.ifBlank { "已登录" })
+                    ActionChip("退出登录", Modifier.fillMaxWidth()) {
+                        controller.logout()
                     }
-                    ActionChip("登录", Modifier.weight(1f)) {
-                        scope.launch { controller.finishSmsLogin(code) }
+                } else {
+                    StatusLine("登录状态", "未登录")
+                    LabeledInput("手机号", phone, onChange = { phone = it }, placeholder = "+86 13800138000")
+                    if (controller.pendingVerificationId.isNotBlank()) {
+                        LabeledInput("短信验证码", code, onChange = { code = it }, placeholder = "6 位验证码")
+                    }
+                    ActionChip(
+                        if (controller.pendingVerificationId.isBlank()) "发送验证码" else "完成登录",
+                        Modifier.fillMaxWidth(),
+                    ) {
+                        scope.launch {
+                            if (controller.pendingVerificationId.isBlank()) {
+                                controller.requestSms(phone)
+                            } else {
+                                controller.finishSmsLogin(code)
+                            }
+                        }
                     }
                 }
-                LabeledInput("短信验证码", code, onChange = { code = it }, placeholder = "6 位验证码")
             }
         }
 
         item {
             SettingsPanel(title = "资源与搜刮") {
-                LabeledInput("资源根目录 ID", rootId, onChange = { rootId = it }, placeholder = "* 表示全部视频")
-                LabeledInput("TMDb API Key / Bearer Token", tmdbToken, onChange = { tmdbToken = it }, placeholder = "用于中文影视数据")
+                RootFolderSelector(
+                    folders = controller.rootFolders.ifEmpty {
+                        listOf(
+                            if (controller.settings.rootId == "*") {
+                                CloudFolder("*", "全部视频")
+                            } else {
+                                CloudFolder(controller.settings.rootId, "当前目录")
+                            }
+                        )
+                    },
+                    selectedId = controller.settings.rootId,
+                    enabled = loggedIn,
+                    onSelected = { controller.updateRootId(it.id) },
+                )
+                LabeledInput(
+                    "TMDb Read Access Token",
+                    tmdbToken,
+                    onChange = { tmdbToken = it },
+                    placeholder = "粘贴 TMDb API Read Access Token",
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ActionChip("保存配置", Modifier.weight(1f)) {
-                        controller.updateRootId(rootId)
                         controller.updateTmdbToken(tmdbToken)
                     }
                     ActionChip(if (controller.loading) "同步中" else "同步资源库", Modifier.weight(1f)) {
-                        controller.updateRootId(rootId)
                         controller.updateTmdbToken(tmdbToken)
                         scope.launch { controller.refreshLibrary() }
                     }
                 }
-                StatusLine("TMDb", if (tmdbToken.isBlank()) "未配置，无法搜刮中文元数据" else "已配置")
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ActionChip("刷新目录", Modifier.weight(1f)) {
+                        scope.launch { controller.refreshRootFolders() }
+                    }
+                    Spacer(Modifier.weight(1f))
+                }
+                StatusLine("TMDb", if (tmdbToken.isBlank()) "未配置，无法建立影视库" else "已配置")
             }
         }
 
@@ -199,29 +262,40 @@ fun MediaDetailOverlay(
             )
         }
 
-        if (group.kind == MediaKind.Tv) {
-            item {
-                SeasonTabs(
-                    group = group,
-                    selectedSeason = selectedSeason,
-                    onSelected = { selectedSeason = it },
-                )
+        when (group.kind) {
+            MediaKind.Tv -> {
+                item {
+                    SeasonTabs(
+                        group = group,
+                        selectedSeason = selectedSeason,
+                        onSelected = { selectedSeason = it },
+                    )
+                }
+                items(group.episodes.filter { (it.parsed.seasonNumber ?: 1) == selectedSeason }) { episode ->
+                    EpisodeRow(
+                        episode = episode,
+                        group = group,
+                        controller = controller,
+                        onClick = { scope.launch { controller.play(it, group, episode) } },
+                    )
+                }
             }
-            items(group.episodes.filter { (it.parsed.seasonNumber ?: 1) == selectedSeason }) { episode ->
-                EpisodeRow(
-                    episode = episode,
-                    group = group,
-                    controller = controller,
-                    onClick = { scope.launch { controller.play(it, group, episode) } },
-                )
+            MediaKind.Movie -> {
+                item {
+                    MovieFileRow(
+                        group = group,
+                        controller = controller,
+                        onClick = { scope.launch { controller.play(it, group) } },
+                    )
+                }
             }
-        } else {
-            item {
-                MovieFileRow(
-                    group = group,
-                    controller = controller,
-                    onClick = { scope.launch { controller.play(it, group) } },
-                )
+            MediaKind.Unknown -> {
+                items(group.unmatchedFiles) { video ->
+                    FileRow(
+                        video = video,
+                        onClick = { scope.launch { controller.playVideo(it, video, video.name) } },
+                    )
+                }
             }
         }
     }
@@ -265,7 +339,7 @@ fun LibrarySearchResults(
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     BasicText(group.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = TextStyle(Ink, 16.sp, FontWeight.Bold))
-                    BasicText(if (group.kind == MediaKind.Tv) "${group.episodes.size} 集" else "电影", style = TextStyle(Muted, 13.sp))
+                    BasicText(group.subtitle(), style = TextStyle(Muted, 13.sp))
                 }
             }
         }
@@ -433,6 +507,40 @@ private fun MovieFileRow(
 }
 
 @Composable
+private fun FileRow(
+    video: CloudVideo,
+    onClick: (android.content.Context) -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val progress = video.playProgressMs
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.72f))
+            .clickable { onClick(context) }
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PosterImage(
+            url = video.rawCoverUrl.takeIf { progress > 0L }.orEmpty(),
+            modifier = Modifier
+                .width(116.dp)
+                .aspectRatio(16f / 9f),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            BasicText(video.name, maxLines = 2, overflow = TextOverflow.Ellipsis, style = TextStyle(Ink, 15.sp, FontWeight.Bold))
+            BasicText(formatFileSize(video.size), style = TextStyle(Muted, 12.sp))
+            if (progress > 0L) {
+                BasicText("已看到 ${formatDuration(progress)}", style = TextStyle(Accent, 12.sp, FontWeight.SemiBold))
+            }
+        }
+    }
+}
+
+@Composable
 private fun MediaCard(
     group: MediaGroup,
     controller: MovioController,
@@ -454,7 +562,7 @@ private fun MediaCard(
                 .aspectRatio(2f / 3f),
         )
         BasicText(group.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = TextStyle(Ink, 15.sp, FontWeight.Bold))
-        BasicText(if (group.kind == MediaKind.Tv) "${group.episodes.size} 集" else "电影", style = TextStyle(Muted, 12.sp))
+        BasicText(group.subtitle(), style = TextStyle(Muted, 12.sp))
     }
 }
 
@@ -509,6 +617,80 @@ private fun SettingsPanel(title: String, content: @Composable ColumnScope.() -> 
     ) {
         BasicText(title, style = TextStyle(Ink, 18.sp, FontWeight.Bold))
         content()
+    }
+}
+
+@Composable
+private fun RootFolderSelector(
+    folders: List<CloudFolder>,
+    selectedId: String,
+    enabled: Boolean,
+    onSelected: (CloudFolder) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = folders.firstOrNull { it.id == selectedId }
+        ?: folders.firstOrNull()
+        ?: CloudFolder("*", "全部视频")
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BasicText("资源根目录", style = TextStyle(Muted, 12.sp, FontWeight.SemiBold))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.White.copy(alpha = if (enabled) 0.78f else 0.45f))
+                .clickable(enabled = enabled) { expanded = !expanded }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicText(
+                    selected.name,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TextStyle(Ink, 15.sp, FontWeight.SemiBold),
+                    modifier = Modifier.weight(1f),
+                )
+                BasicText(if (expanded) "收起" else "选择", style = TextStyle(Muted, 13.sp))
+            }
+        }
+        if (expanded && enabled) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color.White.copy(alpha = 0.92f))
+                    .padding(6.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                folders.forEach { folder ->
+                    val isSelected = folder.id == selected.id
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (isSelected) Accent.copy(alpha = 0.12f) else Color.Transparent)
+                            .clickable {
+                                onSelected(folder)
+                                expanded = false
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BasicText(
+                            folder.name,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = TextStyle(if (isSelected) Accent else Ink, 14.sp, FontWeight.SemiBold),
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (isSelected) {
+                            BasicText("已选", style = TextStyle(Accent, 12.sp, FontWeight.Bold))
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -576,3 +758,22 @@ private fun formatDuration(ms: Long): String {
     val minutes = (total % 3600) / 60
     return if (hours > 0) "${hours}小时${minutes}分" else "${minutes}分"
 }
+
+private fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0L) return "视频文件"
+    val units = listOf("B", "KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var index = 0
+    while (value >= 1024.0 && index < units.lastIndex) {
+        value /= 1024.0
+        index += 1
+    }
+    return if (index == 0) "${bytes}B" else String.format("%.1f%s", value, units[index])
+}
+
+private fun MediaGroup.subtitle(): String =
+    when (kind) {
+        MediaKind.Movie -> "电影"
+        MediaKind.Tv -> "${episodes.size} 集"
+        MediaKind.Unknown -> "${unmatchedFiles.size} 个未匹配文件"
+    }

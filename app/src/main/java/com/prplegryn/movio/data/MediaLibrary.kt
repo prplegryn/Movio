@@ -22,16 +22,13 @@ class MediaLibrary(
             val first = entries.first()
             val firstParsed = first.second
             val hit = tmdb.searchBest(firstParsed)
-            val inferredKind =
-                if (firstParsed.seasonNumber != null || firstParsed.episodeNumber != null) {
-                    MediaKind.Tv
-                } else {
-                    MediaKind.Movie
-                }
-            when (hit?.kind ?: inferredKind) {
+            if (hit == null) {
+                return@map buildUnknownGroup(firstParsed.title, entries)
+            }
+            when (hit.kind) {
                 MediaKind.Tv -> buildTvGroup(firstParsed.title, hit, entries)
                 MediaKind.Movie -> buildMovieGroup(firstParsed.title, hit, entries.first().first)
-                MediaKind.Unknown -> MediaGroup(localTitle = firstParsed.title, kind = MediaKind.Unknown)
+                MediaKind.Unknown -> buildUnknownGroup(firstParsed.title, entries)
             }
         }.sortedBy { it.displayTitle }
     }
@@ -47,6 +44,17 @@ class MediaLibrary(
             kind = MediaKind.Movie,
             tmdb = detailed,
             movieFile = video,
+        )
+    }
+
+    private fun buildUnknownGroup(
+        title: String,
+        entries: List<Pair<CloudVideo, ParsedVideoName>>,
+    ): MediaGroup {
+        return MediaGroup(
+            localTitle = title,
+            kind = MediaKind.Unknown,
+            unmatchedFiles = entries.map { it.first }.sortedBy { it.name },
         )
     }
 

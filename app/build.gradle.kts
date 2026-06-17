@@ -73,6 +73,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.media3:media3-common:1.9.0")
+    implementation("androidx.media3:media3-datasource:1.9.0")
     implementation("androidx.media3:media3-exoplayer:1.9.0")
     implementation("androidx.media3:media3-ui:1.9.0")
     implementation("io.coil-kt.coil3:coil-compose:3.4.0")

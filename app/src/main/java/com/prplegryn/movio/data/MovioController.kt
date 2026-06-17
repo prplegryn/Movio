@@ -17,6 +17,8 @@ class MovioController(context: Context) {
         private set
     var library by mutableStateOf<List<MediaGroup>>(emptyList())
         private set
+    var rootFolders by mutableStateOf<List<CloudFolder>>(emptyList())
+        private set
     var loading by mutableStateOf(false)
         private set
     var message by mutableStateOf("")
@@ -33,6 +35,9 @@ class MovioController(context: Context) {
 
     private var guangya = GuangyaService(settings.guangya)
 
+    val loggedIn: Boolean
+        get() = settings.guangya.accessToken.isNotBlank()
+
     fun updateRootId(value: String) {
         settings = settings.copy(rootId = value.ifBlank { "*" })
         store.saveSettings(settings)
@@ -43,9 +48,29 @@ class MovioController(context: Context) {
         store.saveSettings(settings)
     }
 
+    fun dismissMessage() {
+        message = ""
+    }
+
+    fun logout() {
+        settings = settings.copy(guangya = GuangyaSession(), rootId = "*")
+        store.saveSettings(settings)
+        guangya.updateSession(settings.guangya)
+        rootFolders = emptyList()
+        library = emptyList()
+        pendingCaptchaToken = ""
+        pendingVerificationId = ""
+        pendingPhone = ""
+        message = "已退出登录"
+    }
+
     suspend fun requestSms(phone: String) {
         val normalizedPhone = phone.trim()
-        val result = runBusy("验证码已发送") {
+        if (normalizedPhone.isBlank() || normalizedPhone == "+86") {
+            message = "请输入手机号"
+            return
+        }
+        val result = runBusy("验证码已发送", "验证码发送失败") {
             val init = guangya.loginSmsInit(normalizedPhone)
             val send = guangya.loginSmsSend(normalizedPhone, init.captchaToken)
             init to send
@@ -60,7 +85,15 @@ class MovioController(context: Context) {
         val captchaToken = pendingCaptchaToken
         val phoneNumber = pendingPhone
         val normalizedCode = code.trim()
-        val session = runBusy("光鸭登录成功") {
+        if (verificationId.isBlank() || captchaToken.isBlank()) {
+            message = "请先发送验证码"
+            return
+        }
+        if (normalizedCode.isBlank()) {
+            message = "请输入短信验证码"
+            return
+        }
+        val session = runBusy("光鸭登录成功", "光鸭登录失败") {
             val verify = guangya.loginSmsVerify(verificationId, normalizedCode)
             val session = guangya.loginSmsSignin(
                 phoneNumber = phoneNumber,
@@ -68,6 +101,7 @@ class MovioController(context: Context) {
                 verificationToken = verify.verificationToken,
                 captchaToken = captchaToken,
             )
+            guangya.updateSession(session)
             session
         } ?: return
         settings = settings.copy(guangya = session)
@@ -75,10 +109,39 @@ class MovioController(context: Context) {
         guangya.updateSession(session)
         pendingCaptchaToken = ""
         pendingVerificationId = ""
+        try {
+            val folders = withContext(Dispatchers.IO) {
+                guangya.listRootFolders()
+            }
+            rootFolders = rootOptions(folders)
+        } catch (t: Throwable) {
+            rootFolders = rootOptions(emptyList())
+            message = "光鸭登录成功，目录获取失败：${t.message ?: "未知错误"}"
+        }
+    }
+
+    suspend fun refreshRootFolders() {
+        if (!loggedIn) {
+            rootFolders = emptyList()
+            return
+        }
+        val folders = runBusy("", "目录获取失败") {
+            guangya.updateSession(settings.guangya)
+            guangya.listRootFolders()
+        } ?: return
+        rootFolders = rootOptions(folders)
     }
 
     suspend fun refreshLibrary() {
-        val updated = runBusy("资源库已更新") {
+        if (!loggedIn) {
+            message = "请先登录光鸭"
+            return
+        }
+        if (settings.tmdbToken.isBlank()) {
+            message = "请先配置 TMDb Read Access Token"
+            return
+        }
+        val updated = runBusy("资源库已更新", "资源库同步失败") {
             guangya.updateSession(settings.guangya)
             val mediaLibrary = MediaLibrary(
                 guangya = guangya,
@@ -99,19 +162,26 @@ class MovioController(context: Context) {
     }
 
     suspend fun play(context: Context, group: MediaGroup, episode: LibraryEpisode? = null) {
-        val video = episode?.video ?: group.movieFile ?: group.episodes.firstOrNull()?.video
+        val video = episode?.video
+            ?: group.movieFile
+            ?: group.episodes.firstOrNull()?.video
+            ?: group.unmatchedFiles.firstOrNull()
         if (video == null) {
             message = "没有可播放文件"
             return
         }
-        val url = runBusy("") {
+        playVideo(context, video, episode?.tmdb?.title ?: group.displayTitle)
+    }
+
+    suspend fun playVideo(context: Context, video: CloudVideo, title: String) {
+        val url = runBusy("", "获取播放地址失败") {
             guangya.updateSession(settings.guangya)
             guangya.downloadUrl(video.id)
         } ?: return
         val startMs = store.progress(video.id).takeIf { it > 0L } ?: video.playProgressMs
         val intent = Intent(context, PlayerActivity::class.java)
             .putExtra(PlayerActivity.EXTRA_URL, url)
-            .putExtra(PlayerActivity.EXTRA_TITLE, episode?.tmdb?.title ?: group.displayTitle)
+            .putExtra(PlayerActivity.EXTRA_TITLE, title)
             .putExtra(PlayerActivity.EXTRA_FILE_ID, video.id)
             .putExtra(PlayerActivity.EXTRA_START_MS, startMs)
         context.startActivity(intent)
@@ -120,7 +190,14 @@ class MovioController(context: Context) {
     fun imageUrl(path: String, size: String = "w500"): String =
         TmdbService(settings.tmdbToken).imageUrl(path, size)
 
-    private suspend fun <T> runBusy(successMessage: String, block: suspend () -> T): T? {
+    private fun rootOptions(folders: List<CloudFolder>): List<CloudFolder> =
+        listOf(CloudFolder("*", "全部视频")) + folders
+
+    private suspend fun <T> runBusy(
+        successMessage: String,
+        failurePrefix: String = "操作失败",
+        block: suspend () -> T,
+    ): T? {
         loading = true
         message = ""
         return try {
@@ -132,7 +209,7 @@ class MovioController(context: Context) {
             }
             result
         } catch (t: Throwable) {
-            message = t.message ?: "操作失败"
+            message = "$failurePrefix：${t.message ?: "未知错误"}"
             null
         } finally {
             loading = false

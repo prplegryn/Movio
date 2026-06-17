@@ -29,6 +29,12 @@ data class CloudVideo(
     val rawCoverUrl: String = "",
 )
 
+data class CloudFolder(
+    val id: String,
+    val name: String,
+    val parentId: String = "",
+)
+
 data class ParsedVideoName(
     val title: String,
     val seasonNumber: Int? = null,
@@ -40,6 +46,7 @@ data class TmdbSearchHit(
     val id: Int,
     val kind: MediaKind,
     val title: String,
+    val originalTitle: String = "",
     val overview: String = "",
     val posterPath: String = "",
     val backdropPath: String = "",
@@ -76,6 +83,7 @@ data class MediaGroup(
     val seasons: List<TmdbSeason> = emptyList(),
     val episodes: List<LibraryEpisode> = emptyList(),
     val movieFile: CloudVideo? = null,
+    val unmatchedFiles: List<CloudVideo> = emptyList(),
 ) {
     val displayTitle: String
         get() = tmdb?.title?.takeIf { it.isNotBlank() } ?: localTitle

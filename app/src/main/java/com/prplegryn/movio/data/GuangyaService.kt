@@ -110,12 +110,56 @@ class GuangyaService(
         )
     }
 
+    fun listRootFolders(): List<CloudFolder> =
+        listFolders("")
+
+    fun listFolders(parentId: String, pageSize: Int = 80): List<CloudFolder> {
+        val folders = mutableListOf<CloudFolder>()
+        var page = 0
+        while (page < 8) {
+            val json = postJson(
+                "https://api.guangyapan.com/userres/v1/file/get_file_list",
+                JSONObject()
+                    .put("parentId", parentId)
+                    .put("page", page)
+                    .put("pageSize", pageSize)
+                    .put("orderBy", 0)
+                    .put("sortType", 0),
+                apiHeaders(),
+            )
+            val list = firstArray(json, "list", "files", "items", "data", "rows")
+            if (list.length() == 0) break
+            for (i in 0 until list.length()) {
+                val folder = parseCloudFolder(list.optJSONObject(i) ?: continue)
+                if (folder != null) folders += folder
+            }
+            if (list.length() < pageSize) break
+            page += 1
+        }
+        return folders.distinctBy { it.id }
+    }
+
     fun listVideos(rootId: String, pageSize: Int = 80): List<CloudVideo> {
+        if (rootId.isBlank() || rootId == "*") {
+            return listDirectVideos("*", pageSize)
+        }
+        val visited = mutableSetOf<String>()
+        val all = mutableListOf<CloudVideo>()
+        fun visit(parentId: String, depth: Int) {
+            if (depth > 8 || !visited.add(parentId)) return
+            all += listDirectVideos(parentId, pageSize)
+            listFolders(parentId, pageSize).forEach { visit(it.id, depth + 1) }
+        }
+        visit(rootId, 0)
+        return all.distinctBy { it.id }
+    }
+
+    private fun listDirectVideos(parentId: String, pageSize: Int): List<CloudVideo> {
         val all = mutableListOf<CloudVideo>()
         var page = 0
         while (page < 8) {
             val data = JSONObject()
-                .put("parentId", if (rootId.isBlank() || rootId == "*") "*" else rootId)
+                .put("parentId", parentId)
                 .put("page", page)
                 .put("pageSize", pageSize)
                 .put("orderBy", 3)
@@ -149,7 +193,21 @@ class GuangyaService(
             JSONObject().put("fileId", fileId),
             apiHeaders(),
         )
-        return firstString(json, "downloadUrl", "download_url", "url", "data")
+        return firstString(json, "downloadUrl", "download_url", "url", "data", "urls")
+            .ifBlank { firstHttpUrl(json) }
+            .ifBlank { error("没有获取到播放地址") }
+    }
+
+    private fun parseCloudFolder(json: JSONObject): CloudFolder? {
+        if (!looksLikeFolder(json)) return null
+        val id = firstString(json, "fileId", "file_id", "id", "fid")
+        val name = firstString(json, "fileName", "name", "filename", "title")
+        if (id.isBlank() || name.isBlank()) return null
+        return CloudFolder(
+            id = id,
+            name = name,
+            parentId = firstString(json, "parentId", "parent_id"),
+        )
     }
 
     private fun parseCloudVideo(json: JSONObject): CloudVideo {
@@ -248,11 +306,58 @@ fun firstString(json: JSONObject, vararg keys: String): String {
         if (value is String && value.isNotBlank()) return value
         if (value is Number) return value.toString()
         if (value is JSONObject) {
-            val nested = firstString(value, "url", "value", "downloadUrl")
+            val nested = firstString(value, "url", "value", "downloadUrl", "download_url")
             if (nested.isNotBlank()) return nested
+        }
+        if (value is JSONArray) {
+            for (i in 0 until value.length()) {
+                val nested = value.optJSONObject(i)?.let {
+                    firstString(it, "url", "value", "downloadUrl", "download_url")
+                }.orEmpty()
+                if (nested.isNotBlank()) return nested
+            }
         }
     }
     return ""
+}
+
+private fun firstHttpUrl(value: Any?): String {
+    return when (value) {
+        is String -> value.takeIf { it.startsWith("http://") || it.startsWith("https://") }.orEmpty()
+        is JSONArray -> {
+            for (i in 0 until value.length()) {
+                val nested = firstHttpUrl(value.opt(i))
+                if (nested.isNotBlank()) return nested
+            }
+            ""
+        }
+        is JSONObject -> {
+            value.keys().forEach { key ->
+                val nested = firstHttpUrl(value.opt(key))
+                if (nested.isNotBlank()) return nested
+            }
+            ""
+        }
+        else -> ""
+    }
+}
+
+private fun looksLikeFolder(json: JSONObject): Boolean {
+    if (json.has("isDir")) return json.optBoolean("isDir")
+    if (json.has("is_dir")) return json.optBoolean("is_dir")
+    if (json.has("isFolder")) return json.optBoolean("isFolder")
+    if (json.has("folder")) return json.optBoolean("folder")
+
+    val textualType = listOf("type", "fileType", "file_type", "resType", "res_type")
+        .map { json.opt(it)?.toString().orEmpty().lowercase() }
+    if (textualType.any { it == "folder" || it == "dir" || it == "directory" }) return true
+    if (textualType.any { it == "2" || it == "video" }) return false
+    if (json.optInt("fileType", -1) == 0 || json.optInt("file_type", -1) == 0) return true
+
+    val name = firstString(json, "fileName", "name", "filename", "title")
+    val hasKnownFileExtension = Regex("\\.[a-z0-9]{2,6}$", RegexOption.IGNORE_CASE).containsMatchIn(name)
+    val hasFileSize = json.has("fileSize") || json.has("size") || json.has("bytes")
+    return name.isNotBlank() && !hasKnownFileExtension && !hasFileSize
 }
 
 private fun firstLong(json: JSONObject, vararg keys: String): Long {

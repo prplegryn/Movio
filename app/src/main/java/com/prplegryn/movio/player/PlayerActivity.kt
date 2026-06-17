@@ -34,11 +34,15 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.prplegryn.movio.data.MovioStore
 import com.prplegryn.movio.data.SubtitleTrackInfo
@@ -60,22 +64,42 @@ class PlayerActivity : ComponentActivity() {
         setContent {
             var subtitleTracks by remember { mutableStateOf<List<SubtitleTrackInfo>>(emptyList()) }
             var selectorOpen by remember { mutableStateOf(false) }
+            var playerError by remember { mutableStateOf("") }
             val exo = remember(url) {
-                ExoPlayer.Builder(this@PlayerActivity).build()
+                val httpFactory = DefaultHttpDataSource.Factory()
+                    .setUserAgent(USER_AGENT)
+                    .setDefaultRequestProperties(
+                        mapOf(
+                            "Referer" to "https://www.guangyapan.com/",
+                            "Origin" to "https://www.guangyapan.com",
+                        )
+                    )
+                val dataSourceFactory = DefaultDataSource.Factory(this@PlayerActivity, httpFactory)
+                ExoPlayer.Builder(this@PlayerActivity)
+                    .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                    .build()
             }
 
             DisposableEffect(exo, url) {
                 player = exo
-                exo.setMediaItem(MediaItem.fromUri(url))
-                exo.prepare()
-                if (startMs > 0L) exo.seekTo(startMs)
-                exo.playWhenReady = true
                 val listener = object : Player.Listener {
                     override fun onTracksChanged(tracks: Tracks) {
                         subtitleTracks = readSubtitleTracks(tracks)
                     }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        playerError = "${error.errorCodeName}: ${error.message ?: "播放失败"}"
+                    }
                 }
                 exo.addListener(listener)
+                if (url.isBlank()) {
+                    playerError = "播放地址为空"
+                } else {
+                    exo.setMediaItem(MediaItem.fromUri(url))
+                    exo.prepare()
+                    if (startMs > 0L) exo.seekTo(startMs)
+                    exo.playWhenReady = true
+                }
                 onDispose {
                     saveProgress()
                     exo.removeListener(listener)
@@ -128,6 +152,13 @@ class PlayerActivity : ComponentActivity() {
                             .align(Alignment.TopEnd)
                             .statusBarsPadding()
                             .padding(top = 64.dp, end = 14.dp),
+                    )
+                }
+
+                if (playerError.isNotBlank()) {
+                    PlayerErrorDialog(
+                        message = playerError,
+                        onClose = { finish() },
                     )
                 }
             }
@@ -200,6 +231,8 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_FILE_ID = "file_id"
         const val EXTRA_START_MS = "start_ms"
+        private const val USER_AGENT =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
     }
 }
 
@@ -231,13 +264,16 @@ private fun SubtitleSelector(
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        tracks.forEach { track ->
+        val visibleTracks = tracks.ifEmpty {
+            listOf(SubtitleTrackInfo(-1, "未检测到内嵌字幕", "", true))
+        }
+        visibleTracks.forEach { track ->
             Row(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
                     .background(if (track.selected) Color.White.copy(alpha = 0.18f) else Color.Transparent)
-                    .clickable { onSelected(track) }
+                    .clickable(enabled = tracks.isNotEmpty()) { onSelected(track) }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -247,6 +283,43 @@ private fun SubtitleSelector(
                     modifier = Modifier.width(22.dp),
                 )
                 BasicText(track.label, style = TextStyle(Color.White, 14.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun PlayerErrorDialog(
+    message: String,
+    onClose: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.52f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .width(320.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color.White)
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            BasicText("无法播放", style = TextStyle(Color(0xFF111318), 20.sp, FontWeight.Bold))
+            BasicText(message, style = TextStyle(Color(0xFF4F4B45), 14.sp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFF0088FF))
+                        .clickable(onClick = onClose)
+                        .padding(horizontal = 16.dp, vertical = 9.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    BasicText("关闭", style = TextStyle(Color.White, 14.sp, FontWeight.Bold))
+                }
             }
         }
     }

@@ -10,16 +10,21 @@ import java.util.concurrent.TimeUnit
 class TmdbService(
     private val token: String,
 ) {
+    private val normalizedToken = token.trim()
+        .removePrefix("Bearer")
+        .removePrefix("bearer")
+        .trim()
+    private val useApiKey = Regex("^[a-fA-F0-9]{32}$").matches(normalizedToken)
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
     val configured: Boolean
-        get() = token.isNotBlank()
+        get() = normalizedToken.isNotBlank()
 
     fun searchBest(parsed: ParsedVideoName): TmdbSearchHit? {
-        if (!configured || parsed.title.isBlank()) return null
+        if (!configured || normalizeTitle(parsed.title).length < 2) return null
         val urlBuilder = "https://api.themoviedb.org/3/search/multi".toHttpUrl().newBuilder()
             .addQueryParameter("query", parsed.title)
             .addQueryParameter("language", "zh-CN")
@@ -33,13 +38,12 @@ class TmdbService(
             .filter { it.kind == MediaKind.Movie || it.kind == MediaKind.Tv }
         if (hits.isEmpty()) return null
         val preferredKind = if (parsed.seasonNumber != null || parsed.episodeNumber != null) MediaKind.Tv else null
-        return hits.maxByOrNull { hit ->
-            var score = hit.voteAverage
-            if (preferredKind != null && hit.kind == preferredKind) score += 10.0
-            if (parsed.year != null && hit.releaseDate.startsWith(parsed.year.toString())) score += 4.0
-            if (hit.title.equals(parsed.title, ignoreCase = true)) score += 6.0
-            score
-        }
+        val candidates = preferredKind?.let { kind ->
+            hits.filter { it.kind == kind }.ifEmpty { hits }
+        } ?: hits
+        val scored = candidates.map { hit -> hit to matchScore(parsed, hit, preferredKind) }
+        val best = scored.maxByOrNull { it.second } ?: return null
+        return best.first.takeIf { best.second >= 5.5 }
     }
 
     fun movieDetails(hit: TmdbSearchHit): TmdbSearchHit {
@@ -50,6 +54,7 @@ class TmdbService(
         val json = getJson(urlBuilder.build().toString())
         return hit.copy(
             title = json.optString("title", hit.title),
+            originalTitle = json.optString("original_title", hit.originalTitle),
             overview = json.optString("overview", hit.overview),
             posterPath = json.optString("poster_path", hit.posterPath),
             backdropPath = json.optString("backdrop_path", hit.backdropPath),
@@ -67,6 +72,7 @@ class TmdbService(
         val seasons = json.optJSONArray("seasons") ?: JSONArray()
         return hit.copy(
             title = json.optString("name", hit.title),
+            originalTitle = json.optString("original_name", hit.originalTitle),
             overview = json.optString("overview", hit.overview),
             posterPath = json.optString("poster_path", hit.posterPath),
             backdropPath = json.optString("backdrop_path", hit.backdropPath),
@@ -101,6 +107,7 @@ class TmdbService(
             id = json.optInt("id"),
             kind = kind,
             title = if (kind == MediaKind.Movie) json.optString("title") else json.optString("name"),
+            originalTitle = if (kind == MediaKind.Movie) json.optString("original_title") else json.optString("original_name"),
             overview = json.optString("overview"),
             posterPath = json.optString("poster_path"),
             backdropPath = json.optString("backdrop_path"),
@@ -133,8 +140,9 @@ class TmdbService(
 
     private fun getJson(url: String): JSONObject {
         val builder = Request.Builder().url(url)
-        if (token.startsWith("eyJ") || token.count { it == '.' } >= 2) {
-            builder.header("Authorization", "Bearer $token")
+            .header("accept", "application/json")
+        if (configured && !useApiKey) {
+            builder.header("Authorization", "Bearer $normalizedToken")
         }
         client.newCall(builder.get().build()).execute().use { response ->
             val text = response.body.string()
@@ -146,9 +154,37 @@ class TmdbService(
     }
 
     private fun applyKey(builder: okhttp3.HttpUrl.Builder) {
-        if (token.isBlank()) return
-        if (!token.startsWith("eyJ") && token.count { it == '.' } < 2) {
-            builder.addQueryParameter("api_key", token)
+        if (configured && useApiKey) {
+            builder.addQueryParameter("api_key", normalizedToken)
         }
     }
+
+    private fun matchScore(
+        parsed: ParsedVideoName,
+        hit: TmdbSearchHit,
+        preferredKind: MediaKind?,
+    ): Double {
+        val query = normalizeTitle(parsed.title)
+        val localized = normalizeTitle(hit.title)
+        val original = normalizeTitle(hit.originalTitle)
+        var score = hit.voteAverage / 10.0
+        if (localized == query || original == query) score += 10.0
+        if ((localized.isNotBlank() && localized.contains(query)) ||
+            (original.isNotBlank() && original.contains(query))
+        ) {
+            score += 6.0
+        }
+        if ((localized.isNotBlank() && query.contains(localized)) ||
+            (original.isNotBlank() && query.contains(original))
+        ) {
+            score += 4.0
+        }
+        if (parsed.year != null && hit.releaseDate.startsWith(parsed.year.toString())) score += 4.0
+        if (preferredKind != null && hit.kind == preferredKind) score += 3.0
+        return score
+    }
 }
+
+private fun normalizeTitle(value: String): String =
+    value.lowercase()
+        .replace(Regex("[^a-z0-9\\u4e00-\\u9fa5]+"), "")
