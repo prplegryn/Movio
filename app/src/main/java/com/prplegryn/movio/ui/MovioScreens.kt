@@ -51,6 +51,7 @@ import com.prplegryn.movio.data.LibraryEpisode
 import com.prplegryn.movio.data.MediaGroup
 import com.prplegryn.movio.data.MediaKind
 import com.prplegryn.movio.data.MovioController
+import com.prplegryn.movio.data.TmdbSeason
 import kotlinx.coroutines.launch
 
 private val Ink = Color(0xFF111318)
@@ -77,10 +78,11 @@ fun MovioLibraryPage(
         item {
             PageHeader(
                 title = "资源库",
-                action = if (controller.loading) "同步中" else "同步",
+                action = if (controller.loading) "同步 ${controller.syncProgressPercent.coerceIn(0, 100)}%" else "同步",
                 onAction = { scope.launch { controller.refreshLibrary() } },
             )
         }
+        item { SyncProgressPanel(controller) }
 
         if (controller.library.isEmpty()) {
             item {
@@ -202,11 +204,15 @@ fun MovioMinePage(controller: MovioController) {
                     ActionChip("保存配置", Modifier.weight(1f)) {
                         controller.updateTmdbToken(tmdbToken)
                     }
-                    ActionChip(if (controller.loading) "同步中" else "同步资源库", Modifier.weight(1f)) {
+                    ActionChip(
+                        if (controller.loading) "同步 ${controller.syncProgressPercent.coerceIn(0, 100)}%" else "同步资源库",
+                        Modifier.weight(1f),
+                    ) {
                         controller.updateTmdbToken(tmdbToken)
                         scope.launch { controller.refreshLibrary() }
                     }
                 }
+                SyncProgressPanel(controller)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ActionChip("刷新目录", Modifier.weight(1f)) {
                         scope.launch { controller.refreshRootFolders() }
@@ -403,10 +409,13 @@ private fun DetailHero(
 
 @Composable
 private fun SeasonTabs(group: MediaGroup, selectedSeason: Int, onSelected: (Int) -> Unit) {
-    val seasons = group.seasons.ifEmpty {
-        group.episodes.map { it.parsed.seasonNumber ?: 1 }.distinct().map {
-            com.prplegryn.movio.data.TmdbSeason(it, "第 $it 季")
-        }
+    val seasons = group.episodes
+        .map { it.parsed.seasonNumber ?: 1 }
+        .distinct()
+        .sorted()
+        .map { number ->
+            group.seasons.firstOrNull { it.seasonNumber == number }
+                ?: TmdbSeason(number, "第 $number 季")
     }
     LazyRow(
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
@@ -459,8 +468,10 @@ private fun EpisodeRow(
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            val epNo = episode.parsed.episodeNumber ?: 1
-            BasicText("第 $epNo 集 ${episode.tmdb?.title.orEmpty()}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = TextStyle(Ink, 15.sp, FontWeight.Bold))
+            val title = episode.parsed.episodeNumber?.let { epNo ->
+                "第 $epNo 集 ${episode.tmdb?.title.orEmpty()}".trim()
+            } ?: episode.video.name
+            BasicText(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = TextStyle(Ink, 15.sp, FontWeight.Bold))
             BasicText(episode.tmdb?.overview?.ifBlank { episode.video.name } ?: episode.video.name, maxLines = 2, overflow = TextOverflow.Ellipsis, style = TextStyle(Muted, 12.sp))
             if (progress > 0L) {
                 BasicText("已看到 ${formatDuration(progress)}", style = TextStyle(Accent, 12.sp, FontWeight.SemiBold))
@@ -602,6 +613,46 @@ private fun EmptyPanel(title: String, body: String) {
     ) {
         BasicText(title, style = TextStyle(Ink, 18.sp, FontWeight.Bold))
         BasicText(body, style = TextStyle(Muted, 14.sp))
+    }
+}
+
+@Composable
+private fun SyncProgressPanel(controller: MovioController) {
+    if (!controller.loading && controller.syncProgressLabel.isBlank()) return
+    val percent = controller.syncProgressPercent.coerceIn(0, 100)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.64f))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            BasicText(
+                controller.syncProgressLabel.ifBlank { "同步中" },
+                style = TextStyle(Muted, 13.sp, FontWeight.SemiBold),
+                modifier = Modifier.weight(1f),
+            )
+            BasicText("$percent%", style = TextStyle(Ink, 13.sp, FontWeight.Bold))
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(Color(0xFFE3E7E9)),
+        ) {
+            if (percent > 0) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(percent / 100f)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Accent)
+                )
+            }
+        }
     }
 }
 

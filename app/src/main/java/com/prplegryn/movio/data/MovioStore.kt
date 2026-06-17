@@ -1,6 +1,7 @@
 package com.prplegryn.movio.data
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
@@ -42,6 +43,205 @@ class MovioStore(context: Context) {
         prefs.edit().putString("progress", data.toString()).apply()
     }
 
+    fun loadLibraryCache(rootId: String, fingerprint: String): List<MediaGroup>? {
+        val raw = prefs.getString(libraryCacheKey(rootId), "").orEmpty()
+        if (raw.isBlank()) return null
+        return runCatching {
+            val json = JSONObject(raw)
+            if (json.optString("fingerprint") != fingerprint) return null
+            val groups = json.optJSONArray("groups") ?: return null
+            (0 until groups.length())
+                .mapNotNull { groups.optJSONObject(it)?.toMediaGroup() }
+                .map { it.withSavedProgress() }
+        }.getOrNull()
+    }
+
+    fun saveLibraryCache(rootId: String, fingerprint: String, groups: List<MediaGroup>) {
+        val json = JSONObject()
+            .put("fingerprint", fingerprint)
+            .put(
+                "groups",
+                JSONArray().also { array ->
+                    groups.forEach { array.put(it.toJson()) }
+                },
+            )
+        prefs.edit().putString(libraryCacheKey(rootId), json.toString()).apply()
+    }
+
     private fun newDeviceId(): String =
         UUID.randomUUID().toString().replace("-", "")
+
+    private fun libraryCacheKey(rootId: String): String =
+        "library_cache:${rootId.ifBlank { "*" }}"
+
+    private fun MediaGroup.withSavedProgress(): MediaGroup =
+        copy(
+            episodes = episodes.map { episode -> episode.copy(video = episode.video.withSavedProgress()) },
+            movieFile = movieFile?.withSavedProgress(),
+            movieFiles = movieFiles.map { it.withSavedProgress() },
+            unmatchedFiles = unmatchedFiles.map { it.withSavedProgress() },
+        )
+
+    private fun CloudVideo.withSavedProgress(): CloudVideo {
+        val saved = progress(id)
+        return if (saved > 0L) copy(playProgressMs = saved) else this
+    }
+
+    private fun MediaGroup.toJson(): JSONObject =
+        JSONObject()
+            .put("localTitle", localTitle)
+            .put("kind", kind.name)
+            .put("tmdb", tmdb?.toJson())
+            .putArray("seasons", seasons) { it.toJson() }
+            .putArray("episodes", episodes) { it.toJson() }
+            .put("movieFile", movieFile?.toJson())
+            .putArray("movieFiles", movieFiles) { it.toJson() }
+            .putArray("unmatchedFiles", unmatchedFiles) { it.toJson() }
+
+    private fun JSONObject.toMediaGroup(): MediaGroup =
+        MediaGroup(
+            localTitle = optString("localTitle"),
+            kind = optMediaKind("kind"),
+            tmdb = optJSONObject("tmdb")?.toTmdbSearchHit(),
+            seasons = optJsonArray("seasons") { it.toTmdbSeason() },
+            episodes = optJsonArray("episodes") { it.toLibraryEpisode() },
+            movieFile = optJSONObject("movieFile")?.toCloudVideo(),
+            movieFiles = optJsonArray("movieFiles") { it.toCloudVideo() },
+            unmatchedFiles = optJsonArray("unmatchedFiles") { it.toCloudVideo() },
+        )
+
+    private fun CloudVideo.toJson(): JSONObject =
+        JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("parentId", parentId)
+            .put("folderPath", folderPath)
+            .put("size", size)
+            .put("durationMs", durationMs)
+            .put("playProgressMs", playProgressMs)
+            .put("rawCoverUrl", rawCoverUrl)
+
+    private fun JSONObject.toCloudVideo(): CloudVideo =
+        CloudVideo(
+            id = optString("id"),
+            name = optString("name"),
+            parentId = optString("parentId"),
+            folderPath = optString("folderPath"),
+            size = optLong("size"),
+            durationMs = optLong("durationMs"),
+            playProgressMs = optLong("playProgressMs"),
+            rawCoverUrl = optString("rawCoverUrl"),
+        )
+
+    private fun ParsedVideoName.toJson(): JSONObject =
+        JSONObject()
+            .put("title", title)
+            .put("seasonNumber", seasonNumber)
+            .put("episodeNumber", episodeNumber)
+            .put("year", year)
+            .put("tmdbId", tmdbId)
+            .put("imdbId", imdbId)
+
+    private fun JSONObject.toParsedVideoName(): ParsedVideoName =
+        ParsedVideoName(
+            title = optString("title"),
+            seasonNumber = optNullableInt("seasonNumber"),
+            episodeNumber = optNullableInt("episodeNumber"),
+            year = optNullableInt("year"),
+            tmdbId = optNullableInt("tmdbId"),
+            imdbId = optString("imdbId"),
+        )
+
+    private fun TmdbSearchHit.toJson(): JSONObject =
+        JSONObject()
+            .put("id", id)
+            .put("kind", kind.name)
+            .put("title", title)
+            .put("originalTitle", originalTitle)
+            .put("overview", overview)
+            .put("posterPath", posterPath)
+            .put("backdropPath", backdropPath)
+            .put("releaseDate", releaseDate)
+            .put("voteAverage", voteAverage)
+
+    private fun JSONObject.toTmdbSearchHit(): TmdbSearchHit =
+        TmdbSearchHit(
+            id = optInt("id"),
+            kind = optMediaKind("kind"),
+            title = optString("title"),
+            originalTitle = optString("originalTitle"),
+            overview = optString("overview"),
+            posterPath = optString("posterPath"),
+            backdropPath = optString("backdropPath"),
+            releaseDate = optString("releaseDate"),
+            voteAverage = optDouble("voteAverage"),
+        )
+
+    private fun TmdbSeason.toJson(): JSONObject =
+        JSONObject()
+            .put("seasonNumber", seasonNumber)
+            .put("name", name)
+            .put("posterPath", posterPath)
+            .put("overview", overview)
+
+    private fun JSONObject.toTmdbSeason(): TmdbSeason =
+        TmdbSeason(
+            seasonNumber = optInt("seasonNumber"),
+            name = optString("name"),
+            posterPath = optString("posterPath"),
+            overview = optString("overview"),
+        )
+
+    private fun TmdbEpisode.toJson(): JSONObject =
+        JSONObject()
+            .put("seasonNumber", seasonNumber)
+            .put("episodeNumber", episodeNumber)
+            .put("title", title)
+            .put("overview", overview)
+            .put("stillPath", stillPath)
+            .put("runtime", runtime)
+
+    private fun JSONObject.toTmdbEpisode(): TmdbEpisode =
+        TmdbEpisode(
+            seasonNumber = optInt("seasonNumber"),
+            episodeNumber = optInt("episodeNumber"),
+            title = optString("title"),
+            overview = optString("overview"),
+            stillPath = optString("stillPath"),
+            runtime = optInt("runtime"),
+        )
+
+    private fun LibraryEpisode.toJson(): JSONObject =
+        JSONObject()
+            .put("video", video.toJson())
+            .put("parsed", parsed.toJson())
+            .put("tmdb", tmdb?.toJson())
+
+    private fun JSONObject.toLibraryEpisode(): LibraryEpisode =
+        LibraryEpisode(
+            video = optJSONObject("video")?.toCloudVideo() ?: CloudVideo("", ""),
+            parsed = optJSONObject("parsed")?.toParsedVideoName() ?: ParsedVideoName(""),
+            tmdb = optJSONObject("tmdb")?.toTmdbEpisode(),
+        )
+
+    private fun JSONObject.optMediaKind(key: String): MediaKind =
+        runCatching { MediaKind.valueOf(optString(key, MediaKind.Unknown.name)) }.getOrDefault(MediaKind.Unknown)
+
+    private fun JSONObject.optNullableInt(key: String): Int? =
+        if (has(key) && !isNull(key)) optInt(key) else null
+
+    private fun <T> JSONObject.putArray(key: String, values: List<T>, toJson: (T) -> JSONObject): JSONObject =
+        put(
+            key,
+            JSONArray().also { array ->
+                values.forEach { array.put(toJson(it)) }
+            },
+        )
+
+    private fun <T> JSONObject.optJsonArray(key: String, mapper: (JSONObject) -> T): List<T> {
+        val array = optJSONArray(key) ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            array.optJSONObject(index)?.let(mapper)
+        }
+    }
 }

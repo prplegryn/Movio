@@ -3,6 +3,7 @@ package com.prplegryn.movio.data
 import android.content.Context
 import android.content.Intent
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.prplegryn.movio.player.PlayerActivity
@@ -20,6 +21,10 @@ class MovioController(context: Context) {
     var rootFolders by mutableStateOf<List<CloudFolder>>(emptyList())
         private set
     var loading by mutableStateOf(false)
+        private set
+    var syncProgressPercent by mutableIntStateOf(0)
+        private set
+    var syncProgressLabel by mutableStateOf("")
         private set
     var message by mutableStateOf("")
         private set
@@ -143,6 +148,8 @@ class MovioController(context: Context) {
             message = "请先配置 TMDb Read Access Token"
             return
         }
+        syncProgressPercent = 0
+        syncProgressLabel = "准备同步"
         val updated = runBusy("资源库已更新", "资源库同步失败") {
             guangya.updateSession(settings.guangya)
             val mediaLibrary = MediaLibrary(
@@ -150,10 +157,20 @@ class MovioController(context: Context) {
                 tmdb = TmdbService(settings.tmdbToken),
                 store = store,
             )
-            mediaLibrary.load(settings.rootId)
-        } ?: return
+            mediaLibrary.load(settings.rootId) { percent, label ->
+                withContext(Dispatchers.Main) {
+                    syncProgressPercent = percent.coerceIn(0, 100)
+                    syncProgressLabel = label
+                }
+            }
+        } ?: run {
+            syncProgressLabel = "同步失败"
+            return
+        }
         persistGuangyaSession()
         library = updated
+        syncProgressPercent = 100
+        syncProgressLabel = "同步完成"
     }
 
     fun openDetail(group: MediaGroup) {
@@ -186,6 +203,7 @@ class MovioController(context: Context) {
         val intent = Intent(context, PlayerActivity::class.java)
             .putExtra(PlayerActivity.EXTRA_URL, url)
             .putExtra(PlayerActivity.EXTRA_TITLE, title)
+            .putExtra(PlayerActivity.EXTRA_FILE_NAME, video.name)
             .putExtra(PlayerActivity.EXTRA_FILE_ID, video.id)
             .putExtra(PlayerActivity.EXTRA_START_MS, startMs)
         context.startActivity(intent)

@@ -23,6 +23,7 @@ data class CloudVideo(
     val id: String,
     val name: String,
     val parentId: String = "",
+    val folderPath: String = "",
     val size: Long = 0L,
     val durationMs: Long = 0L,
     val playProgressMs: Long = 0L,
@@ -40,6 +41,8 @@ data class ParsedVideoName(
     val seasonNumber: Int? = null,
     val episodeNumber: Int? = null,
     val year: Int? = null,
+    val tmdbId: Int? = null,
+    val imdbId: String = "",
 )
 
 data class TmdbSearchHit(
@@ -83,6 +86,7 @@ data class MediaGroup(
     val seasons: List<TmdbSeason> = emptyList(),
     val episodes: List<LibraryEpisode> = emptyList(),
     val movieFile: CloudVideo? = null,
+    val movieFiles: List<CloudVideo> = emptyList(),
     val unmatchedFiles: List<CloudVideo> = emptyList(),
 ) {
     val displayTitle: String

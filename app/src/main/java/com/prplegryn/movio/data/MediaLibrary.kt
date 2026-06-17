@@ -5,45 +5,75 @@ class MediaLibrary(
     private val tmdb: TmdbService,
     private val store: MovioStore,
 ) {
-    fun load(rootId: String): List<MediaGroup> {
+    suspend fun load(
+        rootId: String,
+        onProgress: suspend (percent: Int, label: String) -> Unit = { _, _ -> },
+    ): List<MediaGroup> {
+        onProgress(1, "读取资源列表")
         val videos = guangya.listVideos(rootId).map {
             val saved = store.progress(it.id)
             if (saved > 0L) it.copy(playProgressMs = saved) else it
         }
+        val fingerprint = videos.mediaFingerprint()
+        store.loadLibraryCache(rootId, fingerprint)?.let {
+            onProgress(100, "已使用本地缓存")
+            return it
+        }
         if (videos.isEmpty()) return emptyList()
 
-        val parsed = videos.map { it to parseVideoName(it.name) }
-        val grouped = parsed.groupBy { (_, name) ->
-            val isTv = name.seasonNumber != null || name.episodeNumber != null
-            "${if (isTv) "tv" else "movie"}:${name.title.lowercase()}"
-        }
+        onProgress(8, "解析媒体文件")
+        val parsed = videos.map { it to parseVideoName(it.name, it.folderPath) }
+        val grouped = parsed.groupBy { (_, name) -> initialGroupKey(name) }
 
-        return grouped.values.map { entries ->
+        val initialGroups = grouped.values.toList()
+        val scraped = initialGroups.mapIndexed { index, entries ->
+            onProgress(10 + ((index.toFloat() / initialGroups.size.toFloat()) * 68f).toInt(), "搜刮 ${index + 1}/${initialGroups.size}")
             val first = entries.first()
             val firstParsed = first.second
             val hit = tmdb.searchBest(firstParsed)
-            if (hit == null) {
-                return@map buildUnknownGroup(firstParsed.title, entries)
+            ScrapedBucket(
+                localTitle = firstParsed.title,
+                hit = hit,
+                entries = entries,
+            )
+        }
+
+        onProgress(82, "合并季度与版本")
+        val merged = scraped.groupBy { bucket ->
+            val hit = bucket.hit
+            when {
+                hit != null && hit.kind != MediaKind.Unknown -> "${hit.kind}:tmdb:${hit.id}"
+                else -> "unknown:${initialGroupKey(bucket.entries.first().second)}"
             }
-            when (hit.kind) {
-                MediaKind.Tv -> buildTvGroup(firstParsed.title, hit, entries)
-                MediaKind.Movie -> buildMovieGroup(firstParsed.title, hit, entries.first().first)
-                MediaKind.Unknown -> buildUnknownGroup(firstParsed.title, entries)
+        }
+        val result = merged.values.map { buckets ->
+            val hit = buckets.firstNotNullOfOrNull { it.hit }
+            val entries = buckets.flatMap { it.entries }
+            val title = hit?.title?.takeIf { it.isNotBlank() } ?: buckets.first().localTitle
+            when {
+                hit?.kind == MediaKind.Tv -> buildTvGroup(title, hit, entries)
+                hit?.kind == MediaKind.Movie -> buildMovieGroup(title, hit, entries.map { it.first })
+                else -> buildUnknownGroup(title, entries)
             }
         }.sortedBy { it.displayTitle }
+        store.saveLibraryCache(rootId, fingerprint, result)
+        onProgress(100, "同步完成")
+        return result
     }
 
     private fun buildMovieGroup(
         title: String,
         hit: TmdbSearchHit?,
-        video: CloudVideo,
+        videos: List<CloudVideo>,
     ): MediaGroup {
         val detailed = hit?.let { tmdb.movieDetails(it) }
+        val sortedVideos = videos.sortedWith(compareByDescending<CloudVideo> { dynamicRangeScore(it.name) }.thenByDescending { it.size })
         return MediaGroup(
             localTitle = title,
             kind = MediaKind.Movie,
             tmdb = detailed,
-            movieFile = video,
+            movieFile = bestDynamicRangeVideo(sortedVideos),
+            movieFiles = sortedVideos,
         )
     }
 
@@ -68,17 +98,28 @@ class MediaLibrary(
         val seasons = details?.second.orEmpty()
         val seasonCache = mutableMapOf<Int, List<TmdbEpisode>>()
 
-        val episodes = entries.map { (video, parsed) ->
+        val bestEntries = entries
+            .groupBy { (video, parsed) ->
+                parsed.episodeNumber?.let { "${parsed.seasonNumber ?: 1}:$it" } ?: "file:${video.id}"
+            }
+            .values
+            .map { episodeEntries ->
+                episodeEntries.maxWith(compareBy<Pair<CloudVideo, ParsedVideoName>> { dynamicRangeScore(it.first.name) }.thenBy { it.first.size })
+            }
+
+        val episodes = bestEntries.map { (video, parsed) ->
             val seasonNumber = parsed.seasonNumber ?: 1
-            val episodeNumber = parsed.episodeNumber ?: 1
+            val episodeNumber = parsed.episodeNumber
             val tmdbEpisode =
-                detailedHit?.takeIf { it.kind == MediaKind.Tv }?.let {
-                    seasonCache.getOrPut(seasonNumber) {
-                        tmdb.seasonEpisodes(it.id, seasonNumber)
-                    }.firstOrNull { ep -> ep.episodeNumber == episodeNumber }
+                episodeNumber?.let { number ->
+                    detailedHit?.takeIf { it.kind == MediaKind.Tv }?.let {
+                        seasonCache.getOrPut(seasonNumber) {
+                            tmdb.seasonEpisodes(it.id, seasonNumber)
+                        }.firstOrNull { ep -> ep.episodeNumber == number }
+                    }
                 }
             LibraryEpisode(video = video, parsed = parsed, tmdb = tmdbEpisode)
-        }.sortedWith(compareBy({ it.parsed.seasonNumber ?: 1 }, { it.parsed.episodeNumber ?: 1 }, { it.video.name }))
+        }.sortedWith(compareBy({ it.parsed.seasonNumber ?: 1 }, { it.parsed.episodeNumber ?: Int.MAX_VALUE }, { it.video.name }))
 
         return MediaGroup(
             localTitle = title,
@@ -88,4 +129,23 @@ class MediaLibrary(
             episodes = episodes,
         )
     }
+}
+
+private fun List<CloudVideo>.mediaFingerprint(): String =
+    sortedBy { it.id }
+        .joinToString("|") { "${it.id}:${it.name}:${it.size}:${it.durationMs}:${it.folderPath}" }
+
+private data class ScrapedBucket(
+    val localTitle: String,
+    val hit: TmdbSearchHit?,
+    val entries: List<Pair<CloudVideo, ParsedVideoName>>,
+)
+
+private fun initialGroupKey(name: ParsedVideoName): String {
+    val isTv = name.seasonNumber != null || name.episodeNumber != null
+    val providerKey = name.tmdbId?.let { "tmdb:$it" }
+        ?: name.imdbId.takeIf { it.isNotBlank() }?.let { "imdb:$it" }
+    val normalizedTitle = name.title.lowercase()
+        .replace(Regex("[^a-z0-9\\u4e00-\\u9fa5]+"), "")
+    return "${if (isTv) "tv" else "movie"}:${providerKey ?: "$normalizedTitle:${name.year ?: ""}"}"
 }

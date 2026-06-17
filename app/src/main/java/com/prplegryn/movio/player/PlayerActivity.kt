@@ -3,6 +3,9 @@ package com.prplegryn.movio.player
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -43,9 +48,11 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.prplegryn.movio.data.MovioStore
 import com.prplegryn.movio.data.SubtitleTrackInfo
+import kotlinx.coroutines.delay
 
 class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
@@ -58,13 +65,17 @@ class PlayerActivity : ComponentActivity() {
 
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty()
+        val fileName = intent.getStringExtra(EXTRA_FILE_NAME).orEmpty()
         fileId = intent.getStringExtra(EXTRA_FILE_ID).orEmpty()
         val startMs = intent.getLongExtra(EXTRA_START_MS, 0L)
 
         setContent {
             var subtitleTracks by remember { mutableStateOf<List<SubtitleTrackInfo>>(emptyList()) }
+            var dynamicRangeBadges by remember { mutableStateOf<List<String>>(emptyList()) }
             var selectorOpen by remember { mutableStateOf(false) }
             var playerError by remember { mutableStateOf("") }
+            var chromeVisible by remember { mutableStateOf(true) }
+            var zoomFill by remember { mutableStateOf(false) }
             val exo = remember(url) {
                 val httpFactory = DefaultHttpDataSource.Factory()
                     .setUserAgent(USER_AGENT)
@@ -85,6 +96,7 @@ class PlayerActivity : ComponentActivity() {
                 val listener = object : Player.Listener {
                     override fun onTracksChanged(tracks: Tracks) {
                         subtitleTracks = readSubtitleTracks(tracks)
+                        dynamicRangeBadges = readVideoDynamicRangeBadges(tracks)
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
@@ -108,37 +120,69 @@ class PlayerActivity : ComponentActivity() {
                 }
             }
 
+            LaunchedEffect(chromeVisible, selectorOpen, playerError) {
+                if (chromeVisible && !selectorOpen && playerError.isBlank()) {
+                    delay(3000)
+                    chromeVisible = false
+                }
+            }
+
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 AndroidView(
                     factory = { context ->
                         PlayerView(context).apply {
                             player = exo
                             useController = true
+                            controllerShowTimeoutMs = 3000
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            setOnClickListener {
+                                chromeVisible = true
+                            }
                         }
                     },
                     update = { view ->
                         view.player = exo
+                        view.resizeMode = if (zoomFill) {
+                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        } else {
+                            AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        }
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
 
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                AnimatedVisibility(
+                    visible = chromeVisible || selectorOpen || playerError.isNotBlank(),
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.TopCenter),
                 ) {
-                    BasicText(
-                        title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = TextStyle(Color.White, 18.sp, FontWeight.Bold),
-                        modifier = Modifier.weight(1f),
-                    )
-                    PlayerChip("字幕") { selectorOpen = !selectorOpen }
-                    Spacer(Modifier.width(8.dp))
-                    PlayerChip("退出") { finish() }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BasicText(
+                            titleWithBadges(title.ifBlank { fileName }, dynamicRangeBadges),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = TextStyle(Color.White, 18.sp, FontWeight.Bold),
+                            modifier = Modifier.weight(1f),
+                        )
+                        PlayerChip("字幕") {
+                            chromeVisible = true
+                            selectorOpen = !selectorOpen
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        PlayerChip(if (zoomFill) "适应" else "填充") {
+                            chromeVisible = true
+                            zoomFill = !zoomFill
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        PlayerChip("退出") { finish() }
+                    }
                 }
 
                 if (selectorOpen) {
@@ -163,6 +207,43 @@ class PlayerActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun readVideoDynamicRangeBadges(tracks: Tracks): List<String> {
+        val badges = mutableListOf<String>()
+        for (group in tracks.groups) {
+            if (group.type != C.TRACK_TYPE_VIDEO) continue
+            for (i in 0 until group.length) {
+                if (group.isTrackSelected(i)) {
+                    badges += formatDynamicRangeBadges(group.getTrackFormat(i))
+                }
+            }
+        }
+        return badges.distinct()
+    }
+
+    private fun formatDynamicRangeBadges(format: Format): List<String> {
+        val sampleMimeType = format.sampleMimeType.orEmpty().lowercase()
+        val codecs = format.codecs.orEmpty().lowercase()
+        val badges = mutableListOf<String>()
+        if (
+            sampleMimeType.contains("dolby-vision") ||
+            codecs.contains("dvhe") ||
+            codecs.contains("dvh1") ||
+            codecs.contains("dovi")
+        ) {
+            badges += "杜比视界"
+        }
+        when (format.colorInfo?.colorTransfer) {
+            C.COLOR_TRANSFER_ST2084 -> {
+                if ("杜比视界" !in badges) {
+                    badges += if (codecs.contains("hdr10+") || codecs.contains("hdr10plus")) "HDR10+" else "HDR10"
+                }
+            }
+            C.COLOR_TRANSFER_HLG -> badges += "HLG"
+            C.COLOR_TRANSFER_SDR -> badges += "SDR"
+        }
+        return badges.distinct()
     }
 
     override fun onStop() {
@@ -229,12 +310,16 @@ class PlayerActivity : ComponentActivity() {
     companion object {
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_FILE_NAME = "file_name"
         const val EXTRA_FILE_ID = "file_id"
         const val EXTRA_START_MS = "start_ms"
         private const val USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
     }
 }
+
+private fun titleWithBadges(title: String, badges: List<String>): String =
+    if (badges.isEmpty()) title else "$title  ${badges.joinToString(" / ")}"
 
 @androidx.compose.runtime.Composable
 private fun PlayerChip(text: String, onClick: () -> Unit) {

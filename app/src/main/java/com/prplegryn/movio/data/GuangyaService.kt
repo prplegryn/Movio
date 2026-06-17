@@ -144,20 +144,25 @@ class GuangyaService(
 
     fun listVideos(rootId: String, pageSize: Int = 80): List<CloudVideo> {
         if (rootId.isBlank() || rootId == "*") {
-            return listDirectVideos("*", pageSize)
+            return listDirectVideos("*", pageSize, "")
         }
         val visited = mutableSetOf<String>()
         val all = mutableListOf<CloudVideo>()
-        fun visit(parentId: String, depth: Int) {
+        fun visit(parentId: String, folderPath: String, depth: Int) {
             if (depth > 8 || !visited.add(parentId)) return
-            all += listDirectVideos(parentId, pageSize)
-            listFolders(parentId, pageSize).forEach { visit(it.id, depth + 1) }
+            all += listDirectVideos(parentId, pageSize, folderPath)
+            listFolders(parentId, pageSize).forEach { folder ->
+                val nextPath = listOf(folderPath, folder.name)
+                    .filter { it.isNotBlank() }
+                    .joinToString("/")
+                visit(folder.id, nextPath, depth + 1)
+            }
         }
-        visit(rootId, 0)
+        visit(rootId, "", 0)
         return all.distinctBy { it.id }
     }
 
-    private fun listDirectVideos(parentId: String, pageSize: Int): List<CloudVideo> {
+    private fun listDirectVideos(parentId: String, pageSize: Int, folderPath: String): List<CloudVideo> {
         val all = mutableListOf<CloudVideo>()
         var page = 0
         while (page < 8) {
@@ -180,7 +185,7 @@ class GuangyaService(
             if (list.length() == 0) break
             for (i in 0 until list.length()) {
                 val item = list.optJSONObject(i) ?: continue
-                val video = parseCloudVideo(item)
+                val video = parseCloudVideo(item).copy(folderPath = folderPath)
                 if (video.id.isNotBlank() && video.name.isNotBlank()) {
                     all += video
                 }
