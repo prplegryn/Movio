@@ -196,7 +196,7 @@ fun MovioMinePage(controller: MovioController) {
                     "TMDb Read Access Token",
                     tmdbToken,
                     onChange = { tmdbToken = it },
-                    placeholder = "粘贴 TMDb API Read Access Token",
+                    placeholder = "粘贴 Read Access Token，也兼容旧 API Key",
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ActionChip("保存配置", Modifier.weight(1f)) {

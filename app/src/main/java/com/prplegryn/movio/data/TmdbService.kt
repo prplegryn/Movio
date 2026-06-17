@@ -10,10 +10,7 @@ import java.util.concurrent.TimeUnit
 class TmdbService(
     private val token: String,
 ) {
-    private val normalizedToken = token.trim()
-        .removePrefix("Bearer")
-        .removePrefix("bearer")
-        .trim()
+    private val normalizedToken = token.cleanTmdbCredential()
     private val useApiKey = Regex("^[a-fA-F0-9]{32}$").matches(normalizedToken)
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -188,3 +185,15 @@ class TmdbService(
 private fun normalizeTitle(value: String): String =
     value.lowercase()
         .replace(Regex("[^a-z0-9\\u4e00-\\u9fa5]+"), "")
+
+private fun String.cleanTmdbCredential(): String {
+    return trim()
+        .removePrefix("Authorization:")
+        .removePrefix("authorization:")
+        .trim()
+        .removePrefix("Bearer")
+        .removePrefix("bearer")
+        .trim()
+        .trim('"', '\'')
+        .replace(Regex("\\s+"), "")
+}
