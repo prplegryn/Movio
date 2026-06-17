@@ -113,6 +113,7 @@ class MovioController(context: Context) {
             val folders = withContext(Dispatchers.IO) {
                 guangya.listRootFolders()
             }
+            persistGuangyaSession()
             rootFolders = rootOptions(folders)
         } catch (t: Throwable) {
             rootFolders = rootOptions(emptyList())
@@ -129,6 +130,7 @@ class MovioController(context: Context) {
             guangya.updateSession(settings.guangya)
             guangya.listRootFolders()
         } ?: return
+        persistGuangyaSession()
         rootFolders = rootOptions(folders)
     }
 
@@ -150,6 +152,7 @@ class MovioController(context: Context) {
             )
             mediaLibrary.load(settings.rootId)
         } ?: return
+        persistGuangyaSession()
         library = updated
     }
 
@@ -178,6 +181,7 @@ class MovioController(context: Context) {
             guangya.updateSession(settings.guangya)
             guangya.downloadUrl(video.id)
         } ?: return
+        persistGuangyaSession()
         val startMs = store.progress(video.id).takeIf { it > 0L } ?: video.playProgressMs
         val intent = Intent(context, PlayerActivity::class.java)
             .putExtra(PlayerActivity.EXTRA_URL, url)
@@ -192,6 +196,14 @@ class MovioController(context: Context) {
 
     private fun rootOptions(folders: List<CloudFolder>): List<CloudFolder> =
         listOf(CloudFolder("*", "全部视频")) + folders
+
+    private fun persistGuangyaSession() {
+        val current = guangya.currentSession()
+        if (current != settings.guangya) {
+            settings = settings.copy(guangya = current)
+            store.saveSettings(settings)
+        }
+    }
 
     private suspend fun <T> runBusy(
         successMessage: String,

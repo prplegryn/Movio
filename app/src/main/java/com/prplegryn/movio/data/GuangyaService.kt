@@ -34,6 +34,8 @@ class GuangyaService(
         session = newSession
     }
 
+    fun currentSession(): GuangyaSession = session
+
     fun loginSmsInit(phoneNumber: String, captchaToken: String = ""): SmsInitResult {
         val body = JSONObject()
             .put("client_id", CLIENT_ID)
@@ -126,6 +128,7 @@ class GuangyaService(
                     .put("orderBy", 0)
                     .put("sortType", 0),
                 apiHeaders(),
+                retryHeaders = { apiHeaders() },
             )
             val list = firstArray(json, "list", "files", "items", "data", "rows")
             if (list.length() == 0) break
@@ -171,6 +174,7 @@ class GuangyaService(
                 "https://api.guangyapan.com/userres/v1/file/get_file_list",
                 data,
                 apiHeaders(),
+                retryHeaders = { apiHeaders() },
             )
             val list = firstArray(json, "list", "files", "items", "data", "rows")
             if (list.length() == 0) break
@@ -192,6 +196,7 @@ class GuangyaService(
             "https://api.guangyapan.com/nd.bizuserres.s/v1/get_res_download_url",
             JSONObject().put("fileId", fileId),
             apiHeaders(),
+            retryHeaders = { apiHeaders() },
         )
         return firstString(json, "downloadUrl", "download_url", "url", "data", "urls")
             .ifBlank { firstHttpUrl(json) }
@@ -227,6 +232,7 @@ class GuangyaService(
         url: String,
         body: JSONObject,
         headers: Map<String, String>,
+        retryHeaders: (() -> Map<String, String>)? = null,
     ): JSONObject {
         val requestBody = body.toString().toRequestBody(JSON)
         val request = Request.Builder()
@@ -237,10 +243,46 @@ class GuangyaService(
         client.newCall(request).execute().use { response ->
             val text = response.body.string()
             if (!response.isSuccessful) {
+                if (response.code == 401 && retryHeaders != null && session.refreshToken.isNotBlank()) {
+                    refreshAccessToken()
+                    return postJson(url, body, retryHeaders())
+                }
                 error("光鸭请求失败 ${response.code}: $text")
             }
-            return JSONObject(text.ifBlank { "{}" })
+            val json = JSONObject(text.ifBlank { "{}" })
+            if (json.optInt("code") == 117) {
+                if (retryHeaders != null && session.refreshToken.isNotBlank()) {
+                    refreshAccessToken()
+                    return postJson(url, body, retryHeaders())
+                }
+                error("光鸭 token 无效，请重新登录光鸭")
+            }
+            return json
         }
+    }
+
+    private fun refreshAccessToken(): GuangyaSession {
+        val refreshToken = session.refreshToken.ifBlank {
+            error("登录已过期，请重新登录光鸭")
+        }
+        val json = postJson(
+            "https://account.guangyapan.com/v1/auth/token",
+            JSONObject()
+                .put("client_id", CLIENT_ID)
+                .put("grant_type", "refresh_token")
+                .put("refresh_token", refreshToken),
+            accountHeaders() + ("x-action" to "401"),
+        )
+        val accessToken = json.optString("access_token")
+        if (accessToken.isBlank()) {
+            error("刷新光鸭 token 失败")
+        }
+        session = session.copy(
+            accessToken = accessToken,
+            refreshToken = json.optString("refresh_token", refreshToken).ifBlank { refreshToken },
+            deviceId = deviceId(),
+        )
+        return session
     }
 
     private fun accountHeaders(): Map<String, String> =
