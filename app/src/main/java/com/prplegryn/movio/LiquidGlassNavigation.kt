@@ -27,6 +27,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -136,6 +137,9 @@ fun LiquidBottomTabs(
         var currentIndex by remember {
             mutableIntStateOf(externalSelectedIndex)
         }
+        var gestureValue by remember {
+            mutableFloatStateOf(externalSelectedIndex.toFloat())
+        }
 
         fun indexFromPosition(position: Offset): Int {
             val contentWidth = tabWidth * tabsCount
@@ -153,23 +157,26 @@ fun LiquidBottomTabs(
                 pressedScale = 78f / 56f,
                 onDragStarted = { position ->
                     val targetIndex = indexFromPosition(position)
+                    gestureValue = targetIndex.toFloat()
                     currentIndex = targetIndex
-                    updateValue(targetIndex.toFloat())
+                    updateValue(gestureValue)
                 },
                 onDragStopped = {
-                    val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
+                    val targetIndex = gestureValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
                     currentIndex = targetIndex
-                    animateToValue(targetIndex.toFloat())
+                    gestureValue = targetIndex.toFloat()
+                    animateToValue(gestureValue)
                     onTabSelected(targetIndex)
                     animationScope.launch {
                         offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
                     }
                 },
                 onDrag = { _, dragAmount ->
-                    updateValue(
-                        (targetValue + dragAmount.x / tabWidth * if (isLtr) 1f else -1f)
+                    gestureValue =
+                        (gestureValue + dragAmount.x / tabWidth * if (isLtr) 1f else -1f)
                             .fastCoerceIn(0f, (tabsCount - 1).toFloat())
-                    )
+                    currentIndex = gestureValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
+                    updateValue(gestureValue)
                     animationScope.launch {
                         offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
                     }
@@ -182,7 +189,8 @@ fun LiquidBottomTabs(
                 dampedDragAnimation.targetValue.fastRoundToInt() != externalSelectedIndex
             ) {
                 currentIndex = externalSelectedIndex
-                dampedDragAnimation.animateToValue(externalSelectedIndex.toFloat())
+                gestureValue = externalSelectedIndex.toFloat()
+                dampedDragAnimation.animateToValue(gestureValue)
             }
         }
 

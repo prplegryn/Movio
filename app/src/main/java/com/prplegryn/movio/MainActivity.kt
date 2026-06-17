@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateEnterExit
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -607,88 +608,86 @@ private fun SearchOverlay(
 
     LaunchedEffect(visible) {
         if (visible) {
-            focusRequester.requestFocus()
-        } else {
             query = ""
+            focusRequester.requestFocus()
         }
     }
 
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn(tween(180)),
-        exit = fadeOut(tween(160)),
+        exit = fadeOut(tween(220)),
         modifier = Modifier
             .fillMaxSize()
             .zIndex(10f),
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .drawBackdrop(
-                    backdrop = backdrop,
-                    shape = { RectangleShape },
-                    effects = {
-                        blur(18.dp.toPx())
-                    },
-                    onDrawSurface = {
-                        drawRect(Color.Black.copy(alpha = 0.42f))
-                    },
-                )
-                .noRippleClickable(onDismiss)
-        )
-    }
+        Box(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.42f))
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { RectangleShape },
+                        effects = {
+                            blur(18.dp.toPx())
+                        },
+                        onDrawSurface = {
+                            drawRect(Color.Black.copy(alpha = 0.14f))
+                        },
+                    )
+                    .noRippleClickable(onDismiss)
+            )
 
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(170)) + slideInVertically(
-            animationSpec = spring(dampingRatio = 0.84f, stiffness = 260f),
-            initialOffsetY = { -it / 2 },
-        ),
-        exit = fadeOut(tween(120)) + slideOutVertically(
-            animationSpec = tween(140),
-            targetOffsetY = { -it / 2 },
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 18.dp, vertical = 12.dp)
-            .zIndex(11f),
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .clip(RoundedCornerShape(28.dp))
-                .background(Color.White.copy(alpha = 0.96f))
-                .padding(start = 18.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            GlyphIcon(Glyph.Search, MutedInk, Modifier.size(22.dp))
-            Spacer(Modifier.width(10.dp))
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                if (query.isEmpty()) {
-                    BasicText(
-                        text = "搜索",
-                        style = TextStyle(
-                            color = MutedInk.copy(alpha = 0.72f),
-                            fontSize = 18.sp,
+            Row(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .animateEnterExit(
+                        enter = fadeIn(tween(170)) + slideInVertically(
+                            animationSpec = spring(dampingRatio = 0.84f, stiffness = 260f),
+                            initialOffsetY = { -it / 2 },
+                        ),
+                        exit = fadeOut(tween(170)) + slideOutVertically(
+                            animationSpec = tween(190),
+                            targetOffsetY = { -it / 2 },
                         ),
                     )
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 18.dp, vertical = 12.dp)
+                    .height(56.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color.White.copy(alpha = 0.96f))
+                    .padding(start = 18.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GlyphIcon(Glyph.Search, MutedInk, Modifier.size(22.dp))
+                Spacer(Modifier.width(10.dp))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (query.isEmpty()) {
+                        BasicText(
+                            text = "搜索",
+                            style = TextStyle(
+                                color = MutedInk.copy(alpha = 0.72f),
+                                fontSize = 18.sp,
+                            ),
+                        )
+                    }
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = TextStyle(
+                            color = Ink,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        cursorBrush = Brush.verticalGradient(listOf(Accent, Accent)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester),
+                    )
                 }
-                BasicTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        color = Ink,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Medium,
-                    ),
-                    cursorBrush = Brush.verticalGradient(listOf(Accent, Accent)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester),
-                )
             }
         }
     }
