@@ -49,6 +49,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -56,11 +58,13 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
 import com.prplegryn.movio.data.MovioStore
 import com.prplegryn.movio.data.SubtitleTrackInfo
 
 class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
+    private var playerView: PlayerView? = null
     private lateinit var store: MovioStore
     private var fileId: String = ""
 
@@ -114,6 +118,13 @@ class PlayerActivity : ComponentActivity() {
                         dynamicRangeBadges = readVideoDynamicRangeBadges(tracks)
                     }
 
+                    override fun onCues(cueGroup: CueGroup) {
+                        val safeCues = cueGroup.cues.map { it.toScreenSafeCue() }
+                        playerView?.subtitleView?.post {
+                            playerView?.subtitleView?.setCues(safeCues)
+                        }
+                    }
+
                     override fun onPlayerError(error: PlaybackException) {
                         playerError = "${error.errorCodeName}: ${error.message ?: "播放失败"}"
                     }
@@ -132,6 +143,7 @@ class PlayerActivity : ComponentActivity() {
                     exo.removeListener(listener)
                     exo.release()
                     player = null
+                    playerView = null
                 }
             }
 
@@ -139,12 +151,14 @@ class PlayerActivity : ComponentActivity() {
                 AndroidView(
                     factory = { context ->
                         PlayerView(context).apply {
+                            playerView = this
                             player = exo
                             useController = true
                             controllerShowTimeoutMs = 3000
                             resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                             subtitleView?.setApplyEmbeddedStyles(true)
-                            subtitleView?.setApplyEmbeddedFontSizes(true)
+                            subtitleView?.setApplyEmbeddedFontSizes(false)
+                            subtitleView?.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION)
                             subtitleView?.setBottomPaddingFraction(0.12f)
                             setControllerVisibilityListener(
                                 PlayerView.ControllerVisibilityListener { visibility ->
@@ -163,7 +177,7 @@ class PlayerActivity : ComponentActivity() {
                         } else {
                             AspectRatioFrameLayout.RESIZE_MODE_FIT
                         }
-                        view.subtitleView?.setBottomPaddingFraction(if (zoomFill) 0.18f else 0.12f)
+                        view.subtitleView?.setBottomPaddingFraction(if (zoomFill) 0.16f else 0.10f)
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -366,6 +380,20 @@ class PlayerActivity : ComponentActivity() {
 
 private fun titleWithBadges(title: String, badges: List<String>): String =
     if (badges.isEmpty()) title else "$title  ${badges.joinToString(" / ")}"
+
+private fun Cue.toScreenSafeCue(): Cue =
+    buildUpon()
+        .setLine(0.88f, Cue.LINE_TYPE_FRACTION)
+        .setLineAnchor(Cue.ANCHOR_TYPE_END)
+        .setPosition(0.5f)
+        .setPositionAnchor(Cue.ANCHOR_TYPE_MIDDLE)
+        .setSize(0.9f)
+        .apply {
+            if (text != null) {
+                setTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION, Cue.TEXT_SIZE_TYPE_FRACTIONAL)
+            }
+        }
+        .build()
 
 @androidx.compose.runtime.Composable
 private fun PlayerChip(text: String, onClick: () -> Unit) {

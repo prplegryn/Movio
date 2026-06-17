@@ -373,7 +373,17 @@ private fun DetailHero(
     val context = androidx.compose.ui.platform.LocalContext.current
     val seasonPoster = group.seasons.firstOrNull { it.seasonNumber == selectedSeason }?.posterPath.orEmpty()
     val poster = seasonPoster.ifBlank { group.primaryPosterPath }
-    val heroImage = seasonPoster.ifBlank { group.primaryBackdropPath.ifBlank { poster } }
+    val seasonStill = group.episodes
+        .firstOrNull { (it.parsed.seasonNumber ?: 1) == selectedSeason && it.tmdb?.stillPath?.isNotBlank() == true }
+        ?.tmdb
+        ?.stillPath
+        .orEmpty()
+    val heroImage = when (group.kind) {
+        MediaKind.Movie -> group.primaryBackdropPath.ifBlank { group.primaryPosterPath }
+        MediaKind.Tv,
+        MediaKind.Anime -> seasonStill.ifBlank { group.primaryBackdropPath }
+        MediaKind.Unknown -> group.primaryBackdropPath
+    }
     Box(
         Modifier
             .fillMaxWidth()

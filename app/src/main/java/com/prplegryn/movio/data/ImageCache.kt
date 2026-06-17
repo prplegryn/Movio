@@ -91,7 +91,7 @@ private fun List<MediaGroup>.imageTargets(): List<ImageTarget> {
             add(season.posterPath, "w342", "w780")
         }
         group.episodes.forEach { episode ->
-            add(episode.tmdb?.stillPath.orEmpty(), "w300")
+            add(episode.tmdb?.stillPath.orEmpty(), "w300", "w780")
         }
     }
     return targets.distinct()
