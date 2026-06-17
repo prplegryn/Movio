@@ -8,8 +8,9 @@ plugins {
 
 android {
     namespace = "com.prplegryn.movio"
-    compileSdk = 37
-    buildToolsVersion = "37.0.0"
+    compileSdk {
+        version = release(37)
+    }
 
     defaultConfig {
         applicationId = "com.prplegryn.movio"
