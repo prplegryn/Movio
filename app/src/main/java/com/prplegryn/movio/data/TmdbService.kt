@@ -1,0 +1,154 @@
+package com.prplegryn.movio.data
+
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+class TmdbService(
+    private val token: String,
+) {
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    val configured: Boolean
+        get() = token.isNotBlank()
+
+    fun searchBest(parsed: ParsedVideoName): TmdbSearchHit? {
+        if (!configured || parsed.title.isBlank()) return null
+        val urlBuilder = "https://api.themoviedb.org/3/search/multi".toHttpUrl().newBuilder()
+            .addQueryParameter("query", parsed.title)
+            .addQueryParameter("language", "zh-CN")
+            .addQueryParameter("include_adult", "false")
+            .addQueryParameter("page", "1")
+        applyKey(urlBuilder)
+        val json = getJson(urlBuilder.build().toString())
+        val results = json.optJSONArray("results") ?: JSONArray()
+        val hits = (0 until results.length())
+            .mapNotNull { parseSearchHit(results.optJSONObject(it)) }
+            .filter { it.kind == MediaKind.Movie || it.kind == MediaKind.Tv }
+        if (hits.isEmpty()) return null
+        val preferredKind = if (parsed.seasonNumber != null || parsed.episodeNumber != null) MediaKind.Tv else null
+        return hits.maxByOrNull { hit ->
+            var score = hit.voteAverage
+            if (preferredKind != null && hit.kind == preferredKind) score += 10.0
+            if (parsed.year != null && hit.releaseDate.startsWith(parsed.year.toString())) score += 4.0
+            if (hit.title.equals(parsed.title, ignoreCase = true)) score += 6.0
+            score
+        }
+    }
+
+    fun movieDetails(hit: TmdbSearchHit): TmdbSearchHit {
+        if (!configured) return hit
+        val urlBuilder = "https://api.themoviedb.org/3/movie/${hit.id}".toHttpUrl().newBuilder()
+            .addQueryParameter("language", "zh-CN")
+        applyKey(urlBuilder)
+        val json = getJson(urlBuilder.build().toString())
+        return hit.copy(
+            title = json.optString("title", hit.title),
+            overview = json.optString("overview", hit.overview),
+            posterPath = json.optString("poster_path", hit.posterPath),
+            backdropPath = json.optString("backdrop_path", hit.backdropPath),
+            releaseDate = json.optString("release_date", hit.releaseDate),
+            voteAverage = json.optDouble("vote_average", hit.voteAverage),
+        )
+    }
+
+    fun tvDetails(hit: TmdbSearchHit): Pair<TmdbSearchHit, List<TmdbSeason>> {
+        if (!configured) return hit to emptyList()
+        val urlBuilder = "https://api.themoviedb.org/3/tv/${hit.id}".toHttpUrl().newBuilder()
+            .addQueryParameter("language", "zh-CN")
+        applyKey(urlBuilder)
+        val json = getJson(urlBuilder.build().toString())
+        val seasons = json.optJSONArray("seasons") ?: JSONArray()
+        return hit.copy(
+            title = json.optString("name", hit.title),
+            overview = json.optString("overview", hit.overview),
+            posterPath = json.optString("poster_path", hit.posterPath),
+            backdropPath = json.optString("backdrop_path", hit.backdropPath),
+            releaseDate = json.optString("first_air_date", hit.releaseDate),
+            voteAverage = json.optDouble("vote_average", hit.voteAverage),
+        ) to (0 until seasons.length()).mapNotNull { parseSeason(seasons.optJSONObject(it)) }
+            .filter { it.seasonNumber > 0 }
+    }
+
+    fun seasonEpisodes(seriesId: Int, seasonNumber: Int): List<TmdbEpisode> {
+        if (!configured) return emptyList()
+        val urlBuilder = "https://api.themoviedb.org/3/tv/$seriesId/season/$seasonNumber".toHttpUrl().newBuilder()
+            .addQueryParameter("language", "zh-CN")
+        applyKey(urlBuilder)
+        val json = getJson(urlBuilder.build().toString())
+        val episodes = json.optJSONArray("episodes") ?: JSONArray()
+        return (0 until episodes.length()).mapNotNull { parseEpisode(seasonNumber, episodes.optJSONObject(it)) }
+    }
+
+    fun imageUrl(path: String, size: String = "w500"): String =
+        if (path.isBlank()) "" else "https://image.tmdb.org/t/p/$size$path"
+
+    private fun parseSearchHit(json: JSONObject?): TmdbSearchHit? {
+        if (json == null) return null
+        val mediaType = json.optString("media_type")
+        val kind = when (mediaType) {
+            "movie" -> MediaKind.Movie
+            "tv" -> MediaKind.Tv
+            else -> return null
+        }
+        return TmdbSearchHit(
+            id = json.optInt("id"),
+            kind = kind,
+            title = if (kind == MediaKind.Movie) json.optString("title") else json.optString("name"),
+            overview = json.optString("overview"),
+            posterPath = json.optString("poster_path"),
+            backdropPath = json.optString("backdrop_path"),
+            releaseDate = if (kind == MediaKind.Movie) json.optString("release_date") else json.optString("first_air_date"),
+            voteAverage = json.optDouble("vote_average"),
+        )
+    }
+
+    private fun parseSeason(json: JSONObject?): TmdbSeason? {
+        if (json == null) return null
+        return TmdbSeason(
+            seasonNumber = json.optInt("season_number"),
+            name = json.optString("name").ifBlank { "第 ${json.optInt("season_number")} 季" },
+            posterPath = json.optString("poster_path"),
+            overview = json.optString("overview"),
+        )
+    }
+
+    private fun parseEpisode(seasonNumber: Int, json: JSONObject?): TmdbEpisode? {
+        if (json == null) return null
+        return TmdbEpisode(
+            seasonNumber = seasonNumber,
+            episodeNumber = json.optInt("episode_number"),
+            title = json.optString("name").ifBlank { "第 ${json.optInt("episode_number")} 集" },
+            overview = json.optString("overview"),
+            stillPath = json.optString("still_path"),
+            runtime = json.optInt("runtime"),
+        )
+    }
+
+    private fun getJson(url: String): JSONObject {
+        val builder = Request.Builder().url(url)
+        if (token.startsWith("eyJ") || token.count { it == '.' } >= 2) {
+            builder.header("Authorization", "Bearer $token")
+        }
+        client.newCall(builder.get().build()).execute().use { response ->
+            val text = response.body.string()
+            if (!response.isSuccessful) {
+                error("TMDb 请求失败 ${response.code}: $text")
+            }
+            return JSONObject(text.ifBlank { "{}" })
+        }
+    }
+
+    private fun applyKey(builder: okhttp3.HttpUrl.Builder) {
+        if (token.isBlank()) return
+        if (!token.startsWith("eyJ") && token.count { it == '.' } < 2) {
+            builder.addQueryParameter("api_key", token)
+        }
+    }
+}

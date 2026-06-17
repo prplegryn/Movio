@@ -72,12 +72,14 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import coil3.compose.AsyncImage
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -85,6 +87,13 @@ import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
+import com.prplegryn.movio.data.MediaGroup
+import com.prplegryn.movio.data.MovioController
+import com.prplegryn.movio.ui.LibrarySearchResults
+import com.prplegryn.movio.ui.MediaDetailOverlay
+import com.prplegryn.movio.ui.MovioLibraryPage
+import com.prplegryn.movio.ui.MovioMinePage
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -119,6 +128,8 @@ private val Accent = Color(0xFF2F80ED)
 
 @Composable
 private fun MovioApp() {
+    val context = LocalContext.current
+    val controller = remember { MovioController(context) }
     var destination by remember { mutableStateOf(Destination.Play) }
     var searchOpen by remember { mutableStateOf(false) }
     val backdrop = rememberLayerBackdrop {
@@ -126,7 +137,10 @@ private fun MovioApp() {
         drawContent()
     }
 
-    BackHandler(enabled = searchOpen) {
+    BackHandler(enabled = controller.selectedGroup != null) {
+        controller.closeDetail()
+    }
+    BackHandler(enabled = searchOpen && controller.selectedGroup == null) {
         searchOpen = false
     }
 
@@ -138,9 +152,15 @@ private fun MovioApp() {
                 .background(AppBackground)
         ) {
             when (destination) {
-                Destination.Play -> PlayPage()
-                Destination.Library -> TitlePage("资源库")
-                Destination.Mine -> TitlePage("我的")
+                Destination.Play -> PlayPage(
+                    controller = controller,
+                    onOpen = { controller.openDetail(it) },
+                )
+                Destination.Library -> MovioLibraryPage(
+                    controller = controller,
+                    onOpen = { controller.openDetail(it) },
+                )
+                Destination.Mine -> MovioMinePage(controller)
             }
         }
 
@@ -155,13 +175,29 @@ private fun MovioApp() {
         SearchOverlay(
             visible = searchOpen,
             backdrop = backdrop,
+            controller = controller,
+            onOpen = {
+                searchOpen = false
+                controller.openDetail(it)
+            },
             onDismiss = { searchOpen = false },
         )
+
+        controller.selectedGroup?.let { group ->
+            MediaDetailOverlay(
+                group = group,
+                controller = controller,
+                onClose = { controller.closeDetail() },
+            )
+        }
     }
 }
 
 @Composable
-private fun PlayPage() {
+private fun PlayPage(
+    controller: MovioController,
+    onOpen: (MediaGroup) -> Unit,
+) {
     var menuExpanded by remember { mutableStateOf(false) }
 
     Box(
@@ -177,7 +213,10 @@ private fun PlayPage() {
                 )
             )
     ) {
-        PlayContent()
+        PlayContent(
+            controller = controller,
+            onOpen = onOpen,
+        )
 
         PlayTopBar(
             menuExpanded = menuExpanded,
@@ -193,12 +232,37 @@ private fun PlayPage() {
 }
 
 @Composable
-private fun PlayContent() {
+private fun PlayContent(
+    controller: MovioController,
+    onOpen: (MediaGroup) -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 104.dp, bottom = 112.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
+        if (controller.library.isNotEmpty()) {
+            item {
+                LibraryShortcutSection(
+                    title = "继续观看",
+                    groups = controller.library.filter {
+                        ((it.movieFile?.playProgressMs
+                            ?: it.episodes.maxOfOrNull { ep -> ep.video.playProgressMs }
+                            ?: 0L) > 0L)
+                    }.ifEmpty { controller.library.take(8) },
+                    controller = controller,
+                    onOpen = onOpen,
+                )
+            }
+            item {
+                LibraryShortcutSection(
+                    title = "资源库",
+                    groups = controller.library.take(12),
+                    controller = controller,
+                    onOpen = onOpen,
+                )
+            }
+        }
         item {
             CoverSection(
                 title = "最近观看",
@@ -217,6 +281,65 @@ private fun PlayContent() {
         }
         item {
             CoverSection("分类", categoryCovers, wide = false)
+        }
+    }
+}
+
+@Composable
+private fun LibraryShortcutSection(
+    title: String,
+    groups: List<MediaGroup>,
+    controller: MovioController,
+    onOpen: (MediaGroup) -> Unit,
+) {
+    if (groups.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        BasicText(
+            text = title,
+            style = TextStyle(
+                color = Ink,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp),
+        ) {
+            items(groups) { group ->
+                Column(
+                    Modifier
+                        .width(118.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.60f))
+                        .clickable { onOpen(group) }
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(2f / 3f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Brush.linearGradient(listOf(Color(0xFFCBD9DF), Color(0xFFE7E0D2)))),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val poster = controller.imageUrl(group.primaryPosterPath, "w342")
+                        if (poster.isNotBlank()) {
+                            AsyncImage(model = poster, contentDescription = null, modifier = Modifier.fillMaxSize())
+                        } else {
+                            BasicText("Movio", style = TextStyle(MutedInk, 12.sp, FontWeight.Bold))
+                        }
+                    }
+                    BasicText(
+                        group.displayTitle,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = TextStyle(Ink, 13.sp, FontWeight.Bold),
+                    )
+                }
+            }
         }
     }
 }
@@ -600,6 +723,8 @@ private fun IconButton(
 private fun SearchOverlay(
     visible: Boolean,
     backdrop: Backdrop,
+    controller: MovioController,
+    onOpen: (MediaGroup) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -608,6 +733,7 @@ private fun SearchOverlay(
     LaunchedEffect(visible) {
         if (visible) {
             query = ""
+            delay(80)
             focusRequester.requestFocus()
         }
     }
@@ -690,6 +816,13 @@ private fun SearchOverlay(
                     }
                 }
             }
+
+            LibrarySearchResults(
+                query = query,
+                controller = controller,
+                onOpen = onOpen,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
