@@ -4,6 +4,7 @@ build/
 */build/
 local.properties
 captures/
+test/
 *.iml
 *.apk
 *.aab
