@@ -64,57 +64,63 @@ class TmdbService(
     }
 
     fun movieDetails(hit: TmdbSearchHit): TmdbSearchHit {
-        if (!configured) return hit
+        if (!configured || hit.id <= 0) return hit
         movieDetailsCache[hit.id]?.let { return it }
-        val urlBuilder = "https://api.themoviedb.org/3/movie/${hit.id}".toHttpUrl().newBuilder()
-            .addQueryParameter("language", "zh-CN")
-        applyKey(urlBuilder)
-        val json = getJson(urlBuilder.build().toString())
-        val detailed = hit.copy(
-            title = json.optString("title", hit.title),
-            originalTitle = json.optString("original_title", hit.originalTitle),
-            overview = json.optString("overview", hit.overview),
-            posterPath = json.optString("poster_path", hit.posterPath),
-            backdropPath = json.optString("backdrop_path", hit.backdropPath),
-            releaseDate = json.optString("release_date", hit.releaseDate),
-            voteAverage = json.optDouble("vote_average", hit.voteAverage),
-        )
+        val detailed = ignoreMissing(hit) {
+            val urlBuilder = "https://api.themoviedb.org/3/movie/${hit.id}".toHttpUrl().newBuilder()
+                .addQueryParameter("language", "zh-CN")
+            applyKey(urlBuilder)
+            val json = getJson(urlBuilder.build().toString())
+            hit.copy(
+                title = json.optString("title", hit.title),
+                originalTitle = json.optString("original_title", hit.originalTitle),
+                overview = json.optString("overview", hit.overview),
+                posterPath = json.optString("poster_path", hit.posterPath),
+                backdropPath = json.optString("backdrop_path", hit.backdropPath),
+                releaseDate = json.optString("release_date", hit.releaseDate),
+                voteAverage = json.optDouble("vote_average", hit.voteAverage),
+            )
+        }
         movieDetailsCache[hit.id] = detailed
         return detailed
     }
 
     fun tvDetails(hit: TmdbSearchHit): Pair<TmdbSearchHit, List<TmdbSeason>> {
-        if (!configured) return hit to emptyList()
+        if (!configured || hit.id <= 0) return hit to emptyList()
         tvDetailsCache[hit.id]?.let { return it }
-        val urlBuilder = "https://api.themoviedb.org/3/tv/${hit.id}".toHttpUrl().newBuilder()
-            .addQueryParameter("language", "zh-CN")
-        applyKey(urlBuilder)
-        val json = getJson(urlBuilder.build().toString())
-        val seasons = json.optJSONArray("seasons") ?: JSONArray()
-        val detailed = hit.copy(
-            title = json.optString("name", hit.title),
-            originalTitle = json.optString("original_name", hit.originalTitle),
-            overview = json.optString("overview", hit.overview),
-            posterPath = json.optString("poster_path", hit.posterPath),
-            backdropPath = json.optString("backdrop_path", hit.backdropPath),
-            releaseDate = json.optString("first_air_date", hit.releaseDate),
-            voteAverage = json.optDouble("vote_average", hit.voteAverage),
-        ) to (0 until seasons.length()).mapNotNull { parseSeason(seasons.optJSONObject(it)) }
-            .filter { it.seasonNumber > 0 }
+        val detailed = ignoreMissing(hit to emptyList()) {
+            val urlBuilder = "https://api.themoviedb.org/3/tv/${hit.id}".toHttpUrl().newBuilder()
+                .addQueryParameter("language", "zh-CN")
+            applyKey(urlBuilder)
+            val json = getJson(urlBuilder.build().toString())
+            val seasons = json.optJSONArray("seasons") ?: JSONArray()
+            hit.copy(
+                title = json.optString("name", hit.title),
+                originalTitle = json.optString("original_name", hit.originalTitle),
+                overview = json.optString("overview", hit.overview),
+                posterPath = json.optString("poster_path", hit.posterPath),
+                backdropPath = json.optString("backdrop_path", hit.backdropPath),
+                releaseDate = json.optString("first_air_date", hit.releaseDate),
+                voteAverage = json.optDouble("vote_average", hit.voteAverage),
+            ) to (0 until seasons.length()).mapNotNull { parseSeason(seasons.optJSONObject(it)) }
+                .filter { it.seasonNumber > 0 }
+        }
         tvDetailsCache[hit.id] = detailed
         return detailed
     }
 
     fun seasonEpisodes(seriesId: Int, seasonNumber: Int): List<TmdbEpisode> {
-        if (!configured) return emptyList()
+        if (!configured || seriesId <= 0 || seasonNumber <= 0) return emptyList()
         val cacheKey = "$seriesId:$seasonNumber"
         seasonEpisodesCache[cacheKey]?.let { return it }
-        val urlBuilder = "https://api.themoviedb.org/3/tv/$seriesId/season/$seasonNumber".toHttpUrl().newBuilder()
-            .addQueryParameter("language", "zh-CN")
-        applyKey(urlBuilder)
-        val json = getJson(urlBuilder.build().toString())
-        val episodes = json.optJSONArray("episodes") ?: JSONArray()
-        val parsedEpisodes = (0 until episodes.length()).mapNotNull { parseEpisode(seasonNumber, episodes.optJSONObject(it)) }
+        val parsedEpisodes = ignoreMissing(emptyList()) {
+            val urlBuilder = "https://api.themoviedb.org/3/tv/$seriesId/season/$seasonNumber".toHttpUrl().newBuilder()
+                .addQueryParameter("language", "zh-CN")
+            applyKey(urlBuilder)
+            val json = getJson(urlBuilder.build().toString())
+            val episodes = json.optJSONArray("episodes") ?: JSONArray()
+            (0 until episodes.length()).mapNotNull { parseEpisode(seasonNumber, episodes.optJSONObject(it)) }
+        }
         seasonEpisodesCache[cacheKey] = parsedEpisodes
         return parsedEpisodes
     }
@@ -188,8 +194,10 @@ class TmdbService(
 
     private fun parseMovieHit(json: JSONObject?): TmdbSearchHit? {
         if (json == null) return null
+        val id = json.optInt("id")
+        if (id <= 0) return null
         return TmdbSearchHit(
-            id = json.optInt("id"),
+            id = id,
             kind = MediaKind.Movie,
             title = json.optString("title"),
             originalTitle = json.optString("original_title"),
@@ -203,8 +211,10 @@ class TmdbService(
 
     private fun parseTvHit(json: JSONObject?): TmdbSearchHit? {
         if (json == null) return null
+        val id = json.optInt("id")
+        if (id <= 0) return null
         return TmdbSearchHit(
-            id = json.optInt("id"),
+            id = id,
             kind = MediaKind.Tv,
             title = json.optString("name"),
             originalTitle = json.optString("original_name"),
@@ -247,7 +257,7 @@ class TmdbService(
         client.newCall(builder.get().build()).execute().use { response ->
             val text = response.body.string()
             if (!response.isSuccessful) {
-                error("TMDb 请求失败 ${response.code}: $text")
+                throw TmdbHttpException(response.code, text)
             }
             return JSONObject(text.ifBlank { "{}" })
         }
@@ -285,6 +295,22 @@ class TmdbService(
         return score
     }
 }
+
+private class TmdbHttpException(
+    val httpCode: Int,
+    val body: String,
+) : IllegalStateException("TMDb 请求失败 $httpCode: $body")
+
+private inline fun <T> ignoreMissing(fallback: T, block: () -> T): T =
+    try {
+        block()
+    } catch (error: TmdbHttpException) {
+        if (error.httpCode == 404 || error.body.contains("\"status_code\":34")) {
+            fallback
+        } else {
+            throw error
+        }
+    }
 
 private fun normalizeTitle(value: String): String =
     value.lowercase()

@@ -112,8 +112,20 @@ class GuangyaService(
         )
     }
 
-    fun listRootFolders(): List<CloudFolder> =
-        listFolders("")
+    fun listRootFolders(): List<CloudFolder> {
+        val failures = mutableListOf<Throwable>()
+        val rootFolders = runCatching { listFolders("") }
+            .onFailure { failures += it }
+            .getOrDefault(emptyList())
+        val allFolders = runCatching { listFolders(ALL_DIRECTORIES_ID) }
+            .onFailure { failures += it }
+            .getOrDefault(emptyList())
+        val merged = (rootFolders + allFolders).distinctBy { it.id }
+        if (merged.isEmpty() && failures.size == 2) {
+            throw failures.first()
+        }
+        return merged
+    }
 
     fun listFolders(parentId: String, pageSize: Int = 80): List<CloudFolder> {
         val folders = mutableListOf<CloudFolder>()
@@ -143,8 +155,8 @@ class GuangyaService(
     }
 
     fun listVideos(rootId: String, pageSize: Int = 80): List<CloudVideo> {
-        if (rootId.isBlank() || rootId == "*") {
-            return listDirectVideos("*", pageSize, "")
+        if (rootId.isBlank() || rootId == ALL_DIRECTORIES_ID) {
+            return listDirectVideos(ALL_DIRECTORIES_ID, pageSize, "")
         }
         val visited = mutableSetOf<String>()
         val all = mutableListOf<CloudVideo>()
@@ -185,7 +197,8 @@ class GuangyaService(
             if (list.length() == 0) break
             for (i in 0 until list.length()) {
                 val item = list.optJSONObject(i) ?: continue
-                val video = parseCloudVideo(item).copy(folderPath = folderPath)
+                val parsed = parseCloudVideo(item)
+                val video = parsed.copy(folderPath = parsed.folderPath.ifBlank { folderPath })
                 if (video.id.isNotBlank() && video.name.isNotBlank()) {
                     all += video
                 }
@@ -222,10 +235,12 @@ class GuangyaService(
 
     private fun parseCloudVideo(json: JSONObject): CloudVideo {
         val play = json.optJSONObject("playRecord") ?: json.optJSONObject("play_record") ?: JSONObject()
+        val name = firstString(json, "fileName", "name", "filename", "title")
         return CloudVideo(
             id = firstString(json, "fileId", "file_id", "id", "fid"),
-            name = firstString(json, "fileName", "name", "filename", "title"),
+            name = name,
             parentId = firstString(json, "parentId", "parent_id"),
+            folderPath = folderPathFromItem(json, name),
             size = firstLong(json, "fileSize", "size", "bytes"),
             durationMs = firstLong(json, "duration", "durationMs", "videoDuration").normalizeDuration(),
             playProgressMs = firstLong(play, "position", "progress", "playProgress", "play_progress").normalizeDuration(),
@@ -330,6 +345,7 @@ class GuangyaService(
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
         private const val CLIENT_ID = "aMe-8VSlkrbQXpUR"
+        private const val ALL_DIRECTORIES_ID = "*"
         private const val USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
     }
@@ -405,6 +421,21 @@ private fun looksLikeFolder(json: JSONObject): Boolean {
     val hasKnownFileExtension = Regex("\\.[a-z0-9]{2,6}$", RegexOption.IGNORE_CASE).containsMatchIn(name)
     val hasFileSize = json.has("fileSize") || json.has("size") || json.has("bytes")
     return name.isNotBlank() && !hasKnownFileExtension && !hasFileSize
+}
+
+private fun folderPathFromItem(json: JSONObject, fileName: String): String {
+    val raw = firstString(json, "folderPath", "folder_path", "filePath", "file_path", "path", "parentName", "parent_name")
+        .trim()
+        .trim('/')
+    if (raw.isBlank()) return ""
+    val normalizedFileName = fileName.trim('/', '\\')
+    if (normalizedFileName.isBlank()) return raw
+    return when {
+        raw.endsWith("/$normalizedFileName") -> raw.removeSuffix("/$normalizedFileName").trim('/', '\\')
+        raw.endsWith("\\$normalizedFileName") -> raw.removeSuffix("\\$normalizedFileName").trim('/', '\\')
+        raw == normalizedFileName -> ""
+        else -> raw
+    }
 }
 
 private fun firstLong(json: JSONObject, vararg keys: String): Long {

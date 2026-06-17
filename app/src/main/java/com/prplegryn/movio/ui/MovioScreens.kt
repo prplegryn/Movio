@@ -194,6 +194,13 @@ fun MovioMinePage(controller: MovioController) {
                     enabled = loggedIn,
                     onSelected = { controller.updateRootId(it.id) },
                 )
+                if (loggedIn) {
+                    val loadedFolderCount = (controller.rootFolders.size - 1).coerceAtLeast(0)
+                    StatusLine(
+                        "目录",
+                        if (loadedFolderCount > 0) "已加载 $loadedFolderCount 个文件夹" else "未加载到文件夹，可点刷新目录",
+                    )
+                }
                 LabeledInput(
                     "TMDb Read Access Token",
                     tmdbToken,
