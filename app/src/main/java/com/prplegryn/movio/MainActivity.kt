@@ -8,7 +8,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.animateEnterExit
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -639,54 +638,56 @@ private fun SearchOverlay(
                     .noRippleClickable(onDismiss)
             )
 
-            Row(
-                Modifier
-                    .align(Alignment.TopCenter)
-                    .animateEnterExit(
-                        enter = fadeIn(tween(170)) + slideInVertically(
-                            animationSpec = spring(dampingRatio = 0.84f, stiffness = 260f),
-                            initialOffsetY = { -it / 2 },
-                        ),
-                        exit = fadeOut(tween(170)) + slideOutVertically(
-                            animationSpec = tween(190),
-                            targetOffsetY = { -it / 2 },
-                        ),
-                    )
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 18.dp, vertical = 12.dp)
-                    .height(56.dp)
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(Color.White.copy(alpha = 0.96f))
-                    .padding(start = 18.dp, end = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            AnimatedVisibility(
+                visible = visible,
+                enter = fadeIn(tween(170)) + slideInVertically(
+                    animationSpec = spring(dampingRatio = 0.84f, stiffness = 260f),
+                    initialOffsetY = { -it / 2 },
+                ),
+                exit = fadeOut(tween(170)) + slideOutVertically(
+                    animationSpec = tween(190),
+                    targetOffsetY = { -it / 2 },
+                ),
+                modifier = Modifier.align(Alignment.TopCenter),
             ) {
-                GlyphIcon(Glyph.Search, MutedInk, Modifier.size(22.dp))
-                Spacer(Modifier.width(10.dp))
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    if (query.isEmpty()) {
-                        BasicText(
-                            text = "搜索",
-                            style = TextStyle(
-                                color = MutedInk.copy(alpha = 0.72f),
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 18.dp, vertical = 12.dp)
+                        .height(56.dp)
+                        .clip(RoundedCornerShape(28.dp))
+                        .background(Color.White.copy(alpha = 0.96f))
+                        .padding(start = 18.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GlyphIcon(Glyph.Search, MutedInk, Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            BasicText(
+                                text = "搜索",
+                                style = TextStyle(
+                                    color = MutedInk.copy(alpha = 0.72f),
+                                    fontSize = 18.sp,
+                                ),
+                            )
+                        }
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                color = Ink,
                                 fontSize = 18.sp,
+                                fontWeight = FontWeight.Medium,
                             ),
+                            cursorBrush = Brush.verticalGradient(listOf(Accent, Accent)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(focusRequester),
                         )
                     }
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        singleLine = true,
-                        textStyle = TextStyle(
-                            color = Ink,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        cursorBrush = Brush.verticalGradient(listOf(Accent, Accent)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester),
-                    )
                 }
             }
         }
