@@ -18,9 +18,9 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -327,7 +327,7 @@ fun LiquidBottomTabs(
 
         Box(
             Modifier
-                .matchParentSize()
+                .fillMaxSize()
                 .padding(horizontal = 4f.dp)
                 .then(interactiveHighlight.gestureModifier)
                 .then(dampedDragAnimation.modifier),
