@@ -523,13 +523,13 @@ private fun BottomChrome(
                 .weight(1f)
                 .fillMaxHeight(),
         ) {
-            LiquidBottomTab(onClick = { onSelected(Destination.Play) }) {
+            LiquidBottomTab {
                 GlyphIcon(Glyph.Play, Ink, Modifier.size(27.dp))
             }
-            LiquidBottomTab(onClick = { onSelected(Destination.Library) }) {
+            LiquidBottomTab {
                 GlyphIcon(Glyph.Library, Ink, Modifier.size(27.dp))
             }
-            LiquidBottomTab(onClick = { onSelected(Destination.Mine) }) {
+            LiquidBottomTab {
                 GlyphIcon(Glyph.Mine, Ink, Modifier.size(27.dp))
             }
         }

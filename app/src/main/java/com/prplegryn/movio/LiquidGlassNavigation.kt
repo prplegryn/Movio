@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -82,8 +83,6 @@ import com.kyant.backdrop.shadow.Shadow
 import com.kyant.shapes.Capsule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -111,6 +110,7 @@ fun LiquidBottomTabs(
         if (isLightTheme) Color(0xFFFAFAFA).copy(0.4f)
         else Color(0xFF121212).copy(0.4f)
     val tabsBackdrop = rememberLayerBackdrop()
+    val externalSelectedIndex = selectedTabIndex().fastCoerceIn(0, tabsCount - 1)
 
     BoxWithConstraints(
         modifier,
@@ -133,22 +133,34 @@ fun LiquidBottomTabs(
 
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
         val animationScope = rememberCoroutineScope()
-        var currentIndex by remember(selectedTabIndex) {
-            mutableIntStateOf(selectedTabIndex())
+        var currentIndex by remember {
+            mutableIntStateOf(externalSelectedIndex)
         }
-        val dampedDragAnimation = remember(animationScope) {
+
+        fun indexFromPosition(position: Offset): Int {
+            val contentWidth = tabWidth * tabsCount
+            val x = if (isLtr) position.x else contentWidth - position.x
+            return (x / tabWidth).toInt().fastCoerceIn(0, tabsCount - 1)
+        }
+
+        val dampedDragAnimation = remember(animationScope, tabWidth, isLtr, tabsCount) {
             DampedDragAnimation(
                 animationScope = animationScope,
-                initialValue = selectedTabIndex().toFloat(),
+                initialValue = currentIndex.toFloat(),
                 valueRange = 0f..(tabsCount - 1).toFloat(),
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
                 pressedScale = 78f / 56f,
-                onDragStarted = {},
+                onDragStarted = { position ->
+                    val targetIndex = indexFromPosition(position)
+                    currentIndex = targetIndex
+                    updateValue(targetIndex.toFloat())
+                },
                 onDragStopped = {
                     val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
                     currentIndex = targetIndex
                     animateToValue(targetIndex.toFloat())
+                    onTabSelected(targetIndex)
                     animationScope.launch {
                         offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
                     }
@@ -165,19 +177,13 @@ fun LiquidBottomTabs(
             )
         }
 
-        LaunchedEffect(selectedTabIndex) {
-            snapshotFlow { selectedTabIndex() }
-                .collectLatest { index ->
-                    currentIndex = index
-                }
-        }
-        LaunchedEffect(dampedDragAnimation) {
-            snapshotFlow { currentIndex }
-                .drop(1)
-                .collectLatest { index ->
-                    dampedDragAnimation.animateToValue(index.toFloat())
-                    onTabSelected(index)
-                }
+        LaunchedEffect(externalSelectedIndex, dampedDragAnimation) {
+            if (externalSelectedIndex != currentIndex ||
+                dampedDragAnimation.targetValue.fastRoundToInt() != externalSelectedIndex
+            ) {
+                currentIndex = externalSelectedIndex
+                dampedDragAnimation.animateToValue(externalSelectedIndex.toFloat())
+            }
         }
 
         val interactiveHighlight = remember(animationScope) {
@@ -272,8 +278,6 @@ fun LiquidBottomTabs(
                         if (isLtr) dampedDragAnimation.value * tabWidth + panelOffset
                         else size.width - (dampedDragAnimation.value + 1f) * tabWidth + panelOffset
                 }
-                .then(interactiveHighlight.gestureModifier)
-                .then(dampedDragAnimation.modifier)
                 .drawBackdrop(
                     backdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop),
                     shape = { Capsule() },
@@ -320,12 +324,19 @@ fun LiquidBottomTabs(
                 .height(56f.dp)
                 .fillMaxWidth(1f / tabsCount),
         )
+
+        Box(
+            Modifier
+                .matchParentSize()
+                .padding(horizontal = 4f.dp)
+                .then(interactiveHighlight.gestureModifier)
+                .then(dampedDragAnimation.modifier),
+        )
     }
 }
 
 @Composable
 fun RowScope.LiquidBottomTab(
-    onClick: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -333,12 +344,6 @@ fun RowScope.LiquidBottomTab(
     Column(
         modifier
             .clip(Capsule())
-            .clickable(
-                interactionSource = null,
-                indication = null,
-                role = Role.Tab,
-                onClick = onClick,
-            )
             .fillMaxHeight()
             .weight(1f)
             .graphicsLayer {
