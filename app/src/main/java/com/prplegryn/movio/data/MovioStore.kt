@@ -56,6 +56,17 @@ class MovioStore(context: Context) {
         }.getOrNull()
     }
 
+    fun loadSavedLibraryCache(rootId: String): List<MediaGroup>? {
+        val raw = prefs.getString(libraryCacheKey(rootId), "").orEmpty()
+        if (raw.isBlank()) return null
+        return runCatching {
+            val groups = JSONObject(raw).optJSONArray("groups") ?: return null
+            (0 until groups.length())
+                .mapNotNull { groups.optJSONObject(it)?.toMediaGroup() }
+                .map { it.withSavedProgress() }
+        }.getOrNull()
+    }
+
     fun saveLibraryCache(rootId: String, fingerprint: String, groups: List<MediaGroup>) {
         val json = JSONObject()
             .put("fingerprint", fingerprint)

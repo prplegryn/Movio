@@ -4,6 +4,7 @@ class MediaLibrary(
     private val guangya: GuangyaService,
     private val tmdb: TmdbService,
     private val store: MovioStore,
+    private val imageCache: ImageCache? = null,
 ) {
     suspend fun load(
         rootId: String,
@@ -16,6 +17,7 @@ class MediaLibrary(
         }
         val fingerprint = videos.mediaFingerprint()
         store.loadLibraryCache(rootId, fingerprint)?.let {
+            prefetchImages(it, 90, 9, onProgress)
             onProgress(100, "已使用本地缓存")
             return it
         }
@@ -57,9 +59,24 @@ class MediaLibrary(
                 else -> buildUnknownGroup(title, entries)
             }
         }.sortedBy { it.displayTitle }
+        prefetchImages(result, 86, 13, onProgress)
         store.saveLibraryCache(rootId, fingerprint, result)
         onProgress(100, "同步完成")
         return result
+    }
+
+    private suspend fun prefetchImages(
+        groups: List<MediaGroup>,
+        basePercent: Int,
+        span: Int,
+        onProgress: suspend (percent: Int, label: String) -> Unit,
+    ) {
+        val cache = imageCache ?: return
+        onProgress(basePercent, "缓存图片资源")
+        cache.prefetch(groups) { done, total ->
+            val percent = basePercent + ((done.toFloat() / total.toFloat()) * span.toFloat()).toInt()
+            onProgress(percent.coerceIn(basePercent, basePercent + span), "缓存图片 $done/$total")
+        }
     }
 
     private fun buildMovieGroup(

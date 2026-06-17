@@ -1,11 +1,13 @@
 package com.prplegryn.movio.player
 
 import android.os.Bundle
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,7 +23,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +37,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -46,13 +51,13 @@ import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.prplegryn.movio.data.MovioStore
 import com.prplegryn.movio.data.SubtitleTrackInfo
-import kotlinx.coroutines.delay
 
 class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
@@ -61,6 +66,7 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enterImmersiveMode()
         store = MovioStore(this)
 
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
@@ -76,6 +82,7 @@ class PlayerActivity : ComponentActivity() {
             var playerError by remember { mutableStateOf("") }
             var chromeVisible by remember { mutableStateOf(true) }
             var zoomFill by remember { mutableStateOf(false) }
+            val fallbackDynamicRangeBadges = remember(fileName) { readFileNameDynamicRangeBadges(fileName) }
             val exo = remember(url) {
                 val httpFactory = DefaultHttpDataSource.Factory()
                     .setUserAgent(USER_AGENT)
@@ -86,9 +93,17 @@ class PlayerActivity : ComponentActivity() {
                         )
                     )
                 val dataSourceFactory = DefaultDataSource.Factory(this@PlayerActivity, httpFactory)
-                ExoPlayer.Builder(this@PlayerActivity)
+                val renderersFactory = DefaultRenderersFactory(this@PlayerActivity)
+                    .setEnableDecoderFallback(true)
+                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                ExoPlayer.Builder(this@PlayerActivity, renderersFactory)
                     .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
                     .build()
+                    .apply {
+                        setAudioAttributes(AudioAttributes.DEFAULT, true)
+                        setHandleAudioBecomingNoisy(true)
+                        volume = 1f
+                    }
             }
 
             DisposableEffect(exo, url) {
@@ -120,13 +135,6 @@ class PlayerActivity : ComponentActivity() {
                 }
             }
 
-            LaunchedEffect(chromeVisible, selectorOpen, playerError) {
-                if (chromeVisible && !selectorOpen && playerError.isBlank()) {
-                    delay(3000)
-                    chromeVisible = false
-                }
-            }
-
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 AndroidView(
                     factory = { context ->
@@ -135,6 +143,14 @@ class PlayerActivity : ComponentActivity() {
                             useController = true
                             controllerShowTimeoutMs = 3000
                             resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            subtitleView?.setApplyEmbeddedStyles(true)
+                            subtitleView?.setApplyEmbeddedFontSizes(true)
+                            subtitleView?.setBottomPaddingFraction(0.12f)
+                            setControllerVisibilityListener(
+                                PlayerView.ControllerVisibilityListener { visibility ->
+                                    chromeVisible = visibility == View.VISIBLE
+                                }
+                            )
                             setOnClickListener {
                                 chromeVisible = true
                             }
@@ -147,14 +163,15 @@ class PlayerActivity : ComponentActivity() {
                         } else {
                             AspectRatioFrameLayout.RESIZE_MODE_FIT
                         }
+                        view.subtitleView?.setBottomPaddingFraction(if (zoomFill) 0.18f else 0.12f)
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
 
                 AnimatedVisibility(
                     visible = chromeVisible || selectorOpen || playerError.isNotBlank(),
-                    enter = fadeIn(),
-                    exit = fadeOut(),
+                    enter = fadeIn(animationSpec = tween(120)),
+                    exit = fadeOut(animationSpec = tween(120)),
                     modifier = Modifier.align(Alignment.TopCenter),
                 ) {
                     Row(
@@ -165,7 +182,7 @@ class PlayerActivity : ComponentActivity() {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         BasicText(
-                            titleWithBadges(title.ifBlank { fileName }, dynamicRangeBadges),
+                            titleWithBadges(title.ifBlank { fileName }, (dynamicRangeBadges + fallbackDynamicRangeBadges).distinct()),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = TextStyle(Color.White, 18.sp, FontWeight.Bold),
@@ -209,6 +226,11 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) enterImmersiveMode()
+    }
+
     private fun readVideoDynamicRangeBadges(tracks: Tracks): List<String> {
         val badges = mutableListOf<String>()
         for (group in tracks.groups) {
@@ -244,6 +266,30 @@ class PlayerActivity : ComponentActivity() {
             C.COLOR_TRANSFER_SDR -> badges += "SDR"
         }
         return badges.distinct()
+    }
+
+    private fun readFileNameDynamicRangeBadges(fileName: String): List<String> {
+        val value = fileName.lowercase()
+        val badges = mutableListOf<String>()
+        if (
+            Regex("\\b(?:dv|dovi|dolby[ ._-]*vision)\\b").containsMatchIn(value)
+        ) {
+            badges += "杜比视界"
+        }
+        if (Regex("hdr10\\+|hdr10plus").containsMatchIn(value)) badges += "HDR10+"
+        if ("HDR10+" !in badges && Regex("\\bhdr10\\b").containsMatchIn(value)) badges += "HDR10"
+        if ("HDR10+" !in badges && "HDR10" !in badges && Regex("\\bhdr\\b").containsMatchIn(value)) badges += "HDR"
+        if (Regex("\\bhlg\\b").containsMatchIn(value)) badges += "HLG"
+        if (Regex("\\bsdr\\b").containsMatchIn(value)) badges += "SDR"
+        return badges.distinct()
+    }
+
+    private fun enterImmersiveMode() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
     }
 
     override fun onStop() {

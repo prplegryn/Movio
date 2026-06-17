@@ -13,10 +13,11 @@ import kotlinx.coroutines.withContext
 class MovioController(context: Context) {
     private val appContext = context.applicationContext
     private val store = MovioStore(appContext)
+    private val imageCache = ImageCache(appContext)
 
     var settings by mutableStateOf(store.loadSettings())
         private set
-    var library by mutableStateOf<List<MediaGroup>>(emptyList())
+    var library by mutableStateOf(store.loadSavedLibraryCache(settings.rootId).orEmpty())
         private set
     var rootFolders by mutableStateOf<List<CloudFolder>>(emptyList())
         private set
@@ -46,6 +47,7 @@ class MovioController(context: Context) {
     fun updateRootId(value: String) {
         settings = settings.copy(rootId = value.ifBlank { "*" })
         store.saveSettings(settings)
+        library = store.loadSavedLibraryCache(settings.rootId).orEmpty()
     }
 
     fun updateTmdbToken(value: String) {
@@ -156,6 +158,7 @@ class MovioController(context: Context) {
                 guangya = guangya,
                 tmdb = TmdbService(settings.tmdbToken),
                 store = store,
+                imageCache = imageCache,
             )
             mediaLibrary.load(settings.rootId) { percent, label ->
                 withContext(Dispatchers.Main) {
@@ -210,7 +213,7 @@ class MovioController(context: Context) {
     }
 
     fun imageUrl(path: String, size: String = "w500"): String =
-        TmdbService(settings.tmdbToken).imageUrl(path, size)
+        imageCache.model(path, size)
 
     private fun rootOptions(folders: List<CloudFolder>): List<CloudFolder> =
         listOf(CloudFolder("*", "全部视频")) + folders

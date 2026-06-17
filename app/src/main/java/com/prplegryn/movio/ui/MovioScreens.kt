@@ -373,6 +373,7 @@ private fun DetailHero(
     val context = androidx.compose.ui.platform.LocalContext.current
     val seasonPoster = group.seasons.firstOrNull { it.seasonNumber == selectedSeason }?.posterPath.orEmpty()
     val poster = seasonPoster.ifBlank { group.primaryPosterPath }
+    val heroImage = seasonPoster.ifBlank { group.primaryBackdropPath.ifBlank { poster } }
     Box(
         Modifier
             .fillMaxWidth()
@@ -380,7 +381,7 @@ private fun DetailHero(
             .background(Color(0xFFE6E0D5)),
     ) {
         AsyncImage(
-            model = controller.imageUrl(group.primaryBackdropPath.ifBlank { poster }, "w780"),
+            model = controller.imageUrl(heroImage, "w780"),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
         )
