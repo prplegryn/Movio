@@ -53,6 +53,7 @@ class MediaLibrary(
             when {
                 hit?.kind == MediaKind.Tv -> buildTvGroup(title, hit, entries)
                 hit?.kind == MediaKind.Movie -> buildMovieGroup(title, hit, entries.map { it.first })
+                entries.isLikelyLocalAnime() -> buildAnimeGroup(title, entries)
                 else -> buildUnknownGroup(title, entries)
             }
         }.sortedBy { it.displayTitle }
@@ -86,6 +87,13 @@ class MediaLibrary(
             kind = MediaKind.Unknown,
             unmatchedFiles = entries.map { it.first }.sortedBy { it.name },
         )
+    }
+
+    private fun buildAnimeGroup(
+        title: String,
+        entries: List<Pair<CloudVideo, ParsedVideoName>>,
+    ): MediaGroup {
+        return buildTvGroup(title, null, entries).copy(kind = MediaKind.Anime)
     }
 
     private fun buildTvGroup(
@@ -129,6 +137,15 @@ class MediaLibrary(
             episodes = episodes,
         )
     }
+}
+
+private fun List<Pair<CloudVideo, ParsedVideoName>>.isLikelyLocalAnime(): Boolean {
+    if (none { it.second.episodeNumber != null }) return false
+    val text = joinToString(" ") { (video, parsed) ->
+        (listOf(parsed.title) + parsed.aliases + listOf(video.name, video.folderPath)).joinToString(" ")
+    }.lowercase()
+    return listOf("anime", "animation", "donghua", "folktales", "mukashi", "neko", "动漫", "动画", "番剧", "猫")
+        .any { text.contains(it) }
 }
 
 private fun List<CloudVideo>.mediaFingerprint(): String =

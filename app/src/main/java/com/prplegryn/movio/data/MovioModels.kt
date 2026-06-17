@@ -3,6 +3,7 @@ package com.prplegryn.movio.data
 enum class MediaKind {
     Movie,
     Tv,
+    Anime,
     Unknown,
 }
 
@@ -43,6 +44,7 @@ data class ParsedVideoName(
     val year: Int? = null,
     val tmdbId: Int? = null,
     val imdbId: String = "",
+    val aliases: List<String> = emptyList(),
 )
 
 data class TmdbSearchHit(
@@ -55,6 +57,7 @@ data class TmdbSearchHit(
     val backdropPath: String = "",
     val releaseDate: String = "",
     val voteAverage: Double = 0.0,
+    val genreIds: List<Int> = emptyList(),
 )
 
 data class TmdbSeason(
@@ -97,6 +100,9 @@ data class MediaGroup(
 
     val primaryBackdropPath: String
         get() = tmdb?.backdropPath.orEmpty()
+
+    val isAnimation: Boolean
+        get() = kind == MediaKind.Anime || (kind == MediaKind.Tv && tmdb?.genreIds?.contains(16) == true)
 }
 
 data class SubtitleTrackInfo(

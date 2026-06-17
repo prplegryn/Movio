@@ -130,7 +130,7 @@ class GuangyaService(
     fun listFolders(parentId: String, pageSize: Int = 80): List<CloudFolder> {
         val folders = mutableListOf<CloudFolder>()
         var page = 0
-        while (page < 8) {
+        while (page < MAX_PAGES) {
             val json = postJson(
                 "https://api.guangyapan.com/userres/v1/file/get_file_list",
                 JSONObject()
@@ -156,12 +156,14 @@ class GuangyaService(
 
     fun listVideos(rootId: String, pageSize: Int = 80): List<CloudVideo> {
         if (rootId.isBlank() || rootId == ALL_DIRECTORIES_ID) {
-            return listDirectVideos(ALL_DIRECTORIES_ID, pageSize, "")
+            val recursive = listVideosFromFolders(listRootFolders(), pageSize)
+            val global = listDirectVideos(ALL_DIRECTORIES_ID, pageSize, "")
+            return (recursive + global).distinctBy { it.id }
         }
         val visited = mutableSetOf<String>()
         val all = mutableListOf<CloudVideo>()
         fun visit(parentId: String, folderPath: String, depth: Int) {
-            if (depth > 8 || !visited.add(parentId)) return
+            if (depth > MAX_DEPTH || !visited.add(parentId)) return
             all += listDirectVideos(parentId, pageSize, folderPath)
             listFolders(parentId, pageSize).forEach { folder ->
                 val nextPath = listOf(folderPath, folder.name)
@@ -174,10 +176,29 @@ class GuangyaService(
         return all.distinctBy { it.id }
     }
 
+    private fun listVideosFromFolders(folders: List<CloudFolder>, pageSize: Int): List<CloudVideo> {
+        val visited = mutableSetOf<String>()
+        val all = mutableListOf<CloudVideo>()
+        fun visit(folder: CloudFolder, folderPath: String, depth: Int) {
+            if (depth > MAX_DEPTH || !visited.add(folder.id)) return
+            all += listDirectVideos(folder.id, pageSize, folderPath)
+            listFolders(folder.id, pageSize).forEach { child ->
+                val nextPath = listOf(folderPath, child.name)
+                    .filter { it.isNotBlank() }
+                    .joinToString("/")
+                visit(child, nextPath, depth + 1)
+            }
+        }
+        folders.forEach { folder ->
+            visit(folder, folder.name, 0)
+        }
+        return all
+    }
+
     private fun listDirectVideos(parentId: String, pageSize: Int, folderPath: String): List<CloudVideo> {
         val all = mutableListOf<CloudVideo>()
         var page = 0
-        while (page < 8) {
+        while (page < MAX_PAGES) {
             val data = JSONObject()
                 .put("parentId", parentId)
                 .put("page", page)
@@ -346,6 +367,8 @@ class GuangyaService(
         private val JSON = "application/json; charset=utf-8".toMediaType()
         private const val CLIENT_ID = "aMe-8VSlkrbQXpUR"
         private const val ALL_DIRECTORIES_ID = "*"
+        private const val MAX_PAGES = 200
+        private const val MAX_DEPTH = 12
         private const val USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
     }
@@ -411,7 +434,7 @@ private fun looksLikeFolder(json: JSONObject): Boolean {
     if (json.has("isFolder")) return json.optBoolean("isFolder")
     if (json.has("folder")) return json.optBoolean("folder")
 
-    val textualType = listOf("type", "fileType", "file_type", "resType", "res_type")
+    val textualType = listOf("type", "fileType", "file_type")
         .map { json.opt(it)?.toString().orEmpty().lowercase() }
     if (textualType.any { it == "folder" || it == "dir" || it == "directory" }) return true
     if (textualType.any { it == "2" || it == "video" }) return false

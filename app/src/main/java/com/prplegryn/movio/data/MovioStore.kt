@@ -141,6 +141,7 @@ class MovioStore(context: Context) {
             .put("year", year)
             .put("tmdbId", tmdbId)
             .put("imdbId", imdbId)
+            .put("aliases", JSONArray().also { array -> aliases.forEach { array.put(it) } })
 
     private fun JSONObject.toParsedVideoName(): ParsedVideoName =
         ParsedVideoName(
@@ -150,6 +151,7 @@ class MovioStore(context: Context) {
             year = optNullableInt("year"),
             tmdbId = optNullableInt("tmdbId"),
             imdbId = optString("imdbId"),
+            aliases = optStringArray("aliases"),
         )
 
     private fun TmdbSearchHit.toJson(): JSONObject =
@@ -163,6 +165,7 @@ class MovioStore(context: Context) {
             .put("backdropPath", backdropPath)
             .put("releaseDate", releaseDate)
             .put("voteAverage", voteAverage)
+            .put("genreIds", JSONArray().also { array -> genreIds.forEach { array.put(it) } })
 
     private fun JSONObject.toTmdbSearchHit(): TmdbSearchHit =
         TmdbSearchHit(
@@ -175,6 +178,7 @@ class MovioStore(context: Context) {
             backdropPath = optString("backdropPath"),
             releaseDate = optString("releaseDate"),
             voteAverage = optDouble("voteAverage"),
+            genreIds = optIntArray("genreIds"),
         )
 
     private fun TmdbSeason.toJson(): JSONObject =
@@ -229,6 +233,20 @@ class MovioStore(context: Context) {
 
     private fun JSONObject.optNullableInt(key: String): Int? =
         if (has(key) && !isNull(key)) optInt(key) else null
+
+    private fun JSONObject.optStringArray(key: String): List<String> {
+        val array = optJSONArray(key) ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            array.optString(index).takeIf { it.isNotBlank() }
+        }
+    }
+
+    private fun JSONObject.optIntArray(key: String): List<Int> {
+        val array = optJSONArray(key) ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            array.optInt(index).takeIf { it > 0 }
+        }
+    }
 
     private fun <T> JSONObject.putArray(key: String, values: List<T>, toJson: (T) -> JSONObject): JSONObject =
         put(

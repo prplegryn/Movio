@@ -65,8 +65,9 @@ fun MovioLibraryPage(
     onOpen: (MediaGroup) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val movies = controller.library.filter { it.kind == MediaKind.Movie && it.tmdb != null }
-    val tvShows = controller.library.filter { it.kind == MediaKind.Tv && it.tmdb != null }
+    val anime = controller.library.filter { it.isAnimation }
+    val movies = controller.library.filter { it.kind == MediaKind.Movie && it.tmdb != null && !it.isAnimation }
+    val tvShows = controller.library.filter { it.kind == MediaKind.Tv && it.tmdb != null && !it.isAnimation }
     val others = controller.library.filter { it.kind == MediaKind.Unknown }
     LazyColumn(
         modifier = Modifier
@@ -94,6 +95,7 @@ fun MovioLibraryPage(
         } else {
             mediaSection("电影", movies, controller, onOpen)
             mediaSection("电视剧", tvShows, controller, onOpen)
+            mediaSection("动漫", anime, controller, onOpen)
             mediaSection("其他", others, controller, onOpen)
         }
     }
@@ -276,7 +278,8 @@ fun MediaDetailOverlay(
         }
 
         when (group.kind) {
-            MediaKind.Tv -> {
+            MediaKind.Tv,
+            MediaKind.Anime -> {
                 item {
                     SeasonTabs(
                         group = group,
@@ -833,5 +836,6 @@ private fun MediaGroup.subtitle(): String =
     when (kind) {
         MediaKind.Movie -> "电影"
         MediaKind.Tv -> "${episodes.size} 集"
+        MediaKind.Anime -> "${episodes.size} 集"
         MediaKind.Unknown -> "${unmatchedFiles.size} 个未匹配文件"
     }

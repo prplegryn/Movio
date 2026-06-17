@@ -247,8 +247,9 @@ private fun PlayContent(
         contentPadding = PaddingValues(top = 104.dp, bottom = 112.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        val movies = controller.library.filter { it.kind == MediaKind.Movie && it.tmdb != null }
-        val tvShows = controller.library.filter { it.kind == MediaKind.Tv && it.tmdb != null }
+        val anime = controller.library.filter { it.isAnimation }
+        val movies = controller.library.filter { it.kind == MediaKind.Movie && it.tmdb != null && !it.isAnimation }
+        val tvShows = controller.library.filter { it.kind == MediaKind.Tv && it.tmdb != null && !it.isAnimation }
         val others = controller.library.filter { it.kind == MediaKind.Unknown }
         val continueWatching = controller.library.filter {
             ((it.movieFile?.playProgressMs
@@ -286,6 +287,16 @@ private fun PlayContent(
                     LibraryShortcutSection(
                         title = "电视剧",
                         groups = tvShows,
+                        controller = controller,
+                        onOpen = onOpen,
+                    )
+                }
+            }
+            if (anime.isNotEmpty()) {
+                item {
+                    LibraryShortcutSection(
+                        title = "动漫",
+                        groups = anime,
                         controller = controller,
                         onOpen = onOpen,
                     )
@@ -401,6 +412,7 @@ private fun MediaGroup.playSubtitle(): String =
     when (kind) {
         MediaKind.Movie -> "电影"
         MediaKind.Tv -> "${episodes.size} 集"
+        MediaKind.Anime -> "${episodes.size} 集"
         MediaKind.Unknown -> "${unmatchedFiles.size} 个未匹配"
     }
 

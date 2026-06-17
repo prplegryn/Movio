@@ -25,7 +25,7 @@ class TmdbService(
         get() = normalizedToken.isNotBlank()
 
     fun searchBest(parsed: ParsedVideoName): TmdbSearchHit? {
-        val cacheKey = "${parsed.title}|${parsed.year}|${parsed.seasonNumber}|${parsed.episodeNumber}|${parsed.tmdbId}|${parsed.imdbId}"
+        val cacheKey = "${parsed.title}|${parsed.aliases.joinToString(";")}|${parsed.year}|${parsed.seasonNumber}|${parsed.episodeNumber}|${parsed.tmdbId}|${parsed.imdbId}"
         if (searchCache.containsKey(cacheKey)) return searchCache[cacheKey]
         val hit = searchBestUncached(parsed)
         searchCache[cacheKey] = hit
@@ -44,15 +44,16 @@ class TmdbService(
             findByExternalId(imdbId, preferredKind)?.let { return it }
         }
 
-        if (normalizeTitle(parsed.title).length < 2) return null
-        val hits = searchQueries(parsed.title).flatMap { query ->
+        val queries = parsed.searchTitles().flatMap(::searchQueries).distinct()
+        if (queries.isEmpty()) return null
+        val hits = queries.flatMap { query ->
             val primary = when (preferredKind) {
-                MediaKind.Tv -> searchTv(query, parsed.year)
-                else -> searchMovie(query, parsed.year)
+                MediaKind.Tv -> searchTv(query)
+                else -> searchMovie(query, parsed.year) + searchMovie(query, null)
             }
             val secondary = when (preferredKind) {
                 MediaKind.Tv -> searchMovie(query, parsed.year)
-                else -> searchTv(query, parsed.year)
+                else -> searchTv(query)
             }
             primary + secondary
         }.distinctBy { "${it.kind}:${it.id}" }
@@ -79,6 +80,7 @@ class TmdbService(
                 backdropPath = json.optString("backdrop_path", hit.backdropPath),
                 releaseDate = json.optString("release_date", hit.releaseDate),
                 voteAverage = json.optDouble("vote_average", hit.voteAverage),
+                genreIds = parseGenreIds(json).ifEmpty { hit.genreIds },
             )
         }
         movieDetailsCache[hit.id] = detailed
@@ -102,6 +104,7 @@ class TmdbService(
                 backdropPath = json.optString("backdrop_path", hit.backdropPath),
                 releaseDate = json.optString("first_air_date", hit.releaseDate),
                 voteAverage = json.optDouble("vote_average", hit.voteAverage),
+                genreIds = parseGenreIds(json).ifEmpty { hit.genreIds },
             ) to (0 until seasons.length()).mapNotNull { parseSeason(seasons.optJSONObject(it)) }
                 .filter { it.seasonNumber > 0 }
         }
@@ -145,15 +148,12 @@ class TmdbService(
         return (0 until results.length()).mapNotNull { parseMovieHit(results.optJSONObject(it)) }
     }
 
-    private fun searchTv(query: String, year: Int?): List<TmdbSearchHit> {
+    private fun searchTv(query: String): List<TmdbSearchHit> {
         val urlBuilder = "https://api.themoviedb.org/3/search/tv".toHttpUrl().newBuilder()
             .addQueryParameter("query", query)
             .addQueryParameter("language", "zh-CN")
             .addQueryParameter("include_adult", "false")
             .addQueryParameter("page", "1")
-        if (year != null) {
-            urlBuilder.addQueryParameter("first_air_date_year", year.toString())
-        }
         applyKey(urlBuilder)
         val json = getJson(urlBuilder.build().toString())
         val results = json.optJSONArray("results") ?: JSONArray()
@@ -175,6 +175,7 @@ class TmdbService(
                     applyKey(urlBuilder)
                     parseTvHit(getJson(urlBuilder.build().toString()))
                 }
+                MediaKind.Anime -> null
                 MediaKind.Unknown -> null
             }
         }.getOrNull()
@@ -206,6 +207,7 @@ class TmdbService(
             backdropPath = json.optString("backdrop_path"),
             releaseDate = json.optString("release_date"),
             voteAverage = json.optDouble("vote_average"),
+            genreIds = parseGenreIds(json),
         )
     }
 
@@ -223,7 +225,19 @@ class TmdbService(
             backdropPath = json.optString("backdrop_path"),
             releaseDate = json.optString("first_air_date"),
             voteAverage = json.optDouble("vote_average"),
+            genreIds = parseGenreIds(json),
         )
+    }
+
+    private fun parseGenreIds(json: JSONObject): List<Int> {
+        val ids = json.optJSONArray("genre_ids")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optInt(it).takeIf { id -> id > 0 } }
+        }.orEmpty()
+        if (ids.isNotEmpty()) return ids
+        val genres = json.optJSONArray("genres") ?: return emptyList()
+        return (0 until genres.length()).mapNotNull { index ->
+            genres.optJSONObject(index)?.optInt("id")?.takeIf { it > 0 }
+        }
     }
 
     private fun parseSeason(json: JSONObject?): TmdbSeason? {
@@ -274,27 +288,47 @@ class TmdbService(
         hit: TmdbSearchHit,
         preferredKind: MediaKind?,
     ): Double {
-        val query = normalizeTitle(parsed.title)
+        val queries = parsed.searchTitles().map(::normalizeTitle).filter { it.isNotBlank() }
         val localized = normalizeTitle(hit.title)
         val original = normalizeTitle(hit.originalTitle)
         var score = hit.voteAverage / 10.0
-        if (localized == query || original == query) score += 10.0
-        if ((localized.isNotBlank() && localized.contains(query)) ||
-            (original.isNotBlank() && original.contains(query))
+        if (queries.any { localized == it || original == it }) score += 10.0
+        if (queries.any {
+                it.isNotBlank() &&
+                    ((localized.isNotBlank() && localized.contains(it)) || (original.isNotBlank() && original.contains(it)))
+            }
         ) {
             score += 6.0
         }
-        if ((localized.isNotBlank() && query.contains(localized)) ||
-            (original.isNotBlank() && query.contains(original))
+        if (queries.any {
+                (localized.isNotBlank() && it.contains(localized)) || (original.isNotBlank() && it.contains(original))
+            }
         ) {
             score += 4.0
         }
-        score += maxOf(titleSimilarity(query, localized), titleSimilarity(query, original)) * 5.0
-        if (parsed.year != null && hit.releaseDate.startsWith(parsed.year.toString())) score += 4.0
+        score += queries.maxOfOrNull { maxOf(titleSimilarity(it, localized), titleSimilarity(it, original)) }?.times(5.0) ?: 0.0
+        if (parsed.year != null && hit.kind == MediaKind.Movie) {
+            if (hit.releaseDate.startsWith(parsed.year.toString())) {
+                score += 4.0
+            } else if (hit.releaseDate.isNotBlank()) {
+                score -= 4.0
+            }
+        }
+        val documentaryPattern = Regex("(?i)(makingof|behindthescenes|documentary|featurette)")
+        val documentaryQuery = queries.any { documentaryPattern.containsMatchIn(it) }
+        val documentaryHit = documentaryPattern.containsMatchIn("$localized $original")
+        if (!documentaryQuery && documentaryHit) score -= 5.0
         if (preferredKind != null && hit.kind == preferredKind) score += 3.0
         return score
     }
 }
+
+private fun ParsedVideoName.searchTitles(): List<String> =
+    (listOf(title) + aliases)
+        .map { it.replace(Regex("\\s+"), " ").trim() }
+        .filter { normalizeTitle(it).length >= 2 }
+        .distinctBy(::normalizeTitle)
+        .take(9)
 
 private class TmdbHttpException(
     val httpCode: Int,
