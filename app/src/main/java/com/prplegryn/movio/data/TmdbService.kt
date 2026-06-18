@@ -72,7 +72,8 @@ class TmdbService(
         val detailed = ignoreMissing(hit) {
             val urlBuilder = "https://api.themoviedb.org/3/movie/${hit.id}".toHttpUrl().newBuilder()
                 .addQueryParameter("language", "zh-CN")
-                .addQueryParameter("append_to_response", "credits")
+                .addQueryParameter("append_to_response", "credits,images")
+                .addQueryParameter("include_image_language", "zh,en,null")
             applyKey(urlBuilder)
             val json = getJson(urlBuilder.build().toString())
             hit.copy(
@@ -81,7 +82,7 @@ class TmdbService(
                 tagline = json.optString("tagline", hit.tagline),
                 overview = json.optString("overview", hit.overview),
                 posterPath = json.optString("poster_path", hit.posterPath),
-                backdropPath = json.optString("backdrop_path", hit.backdropPath),
+                backdropPath = preferredBackdrop(json, hit.backdropPath),
                 releaseDate = json.optString("release_date", hit.releaseDate),
                 voteAverage = json.optDouble("vote_average", hit.voteAverage),
                 runtime = json.optInt("runtime", hit.runtime),
@@ -100,7 +101,8 @@ class TmdbService(
         val detailed = ignoreMissing(hit to emptyList()) {
             val urlBuilder = "https://api.themoviedb.org/3/tv/${hit.id}".toHttpUrl().newBuilder()
                 .addQueryParameter("language", "zh-CN")
-                .addQueryParameter("append_to_response", "credits")
+                .addQueryParameter("append_to_response", "credits,images")
+                .addQueryParameter("include_image_language", "zh,en,null")
             applyKey(urlBuilder)
             val json = getJson(urlBuilder.build().toString())
             val detailedHit = hit.copy(
@@ -109,7 +111,7 @@ class TmdbService(
                 tagline = json.optString("tagline", hit.tagline),
                 overview = json.optString("overview", hit.overview),
                 posterPath = json.optString("poster_path", hit.posterPath),
-                backdropPath = json.optString("backdrop_path", hit.backdropPath),
+                backdropPath = preferredBackdrop(json, hit.backdropPath),
                 releaseDate = json.optString("first_air_date", hit.releaseDate),
                 voteAverage = json.optDouble("vote_average", hit.voteAverage),
                 runtime = parseTvRuntime(json).takeIf { it > 0 } ?: hit.runtime,
@@ -290,12 +292,34 @@ class TmdbService(
             ?: 0
     }
 
+    private fun preferredBackdrop(json: JSONObject, fallbackPath: String): String {
+        val primary = json.optString("backdrop_path")
+            .takeIf { it.isNotBlank() && it != "null" }
+        if (primary != null) return primary
+        val backdrops = json.optJSONObject("images")?.optJSONArray("backdrops") ?: return fallbackPath
+        return (0 until backdrops.length())
+            .mapNotNull { backdrops.optJSONObject(it) }
+            .filter { image ->
+                image.optDouble("aspect_ratio", 0.0) in 1.6..2.1 &&
+                    image.optString("file_path").isNotBlank()
+            }
+            .maxByOrNull { image ->
+                image.optDouble("vote_average", 0.0) + image.optInt("vote_count", 0) * 0.02
+            }
+            ?.optString("file_path")
+            .orEmpty()
+            .ifBlank { fallbackPath }
+    }
+
     private fun assignSeasonBackdrops(
         seriesId: Int,
         seasons: List<TmdbSeason>,
         fallbackPath: String,
     ): List<TmdbSeason> {
         if (seasons.isEmpty()) return seasons
+        if (seasons.size == 1) {
+            return seasons.map { it.copy(backdropPath = fallbackPath) }
+        }
         val candidates = runCatching {
             val urlBuilder = "https://api.themoviedb.org/3/tv/$seriesId/images".toHttpUrl().newBuilder()
                 .addQueryParameter("include_image_language", "zh,en,null")
@@ -314,9 +338,7 @@ class TmdbService(
             imageFeature(path, "w300")?.let { feature -> path to feature }
         }
         if (candidateFeatures.isEmpty()) {
-            return seasons.mapIndexed { index, season ->
-                season.copy(backdropPath = candidates.getOrNull(index) ?: fallbackPath)
-            }
+            return seasons.map { it.copy(backdropPath = fallbackPath) }
         }
 
         val unused = candidateFeatures.toMutableList()
@@ -328,7 +350,10 @@ class TmdbService(
                 unused.minByOrNull { (_, feature) -> featureDistance(posterFeature, feature) }
             }
             if (selected != null) unused.remove(selected)
-            season.copy(backdropPath = selected?.first ?: fallbackPath)
+            val match = selected?.takeIf { (_, feature) ->
+                posterFeature != null && featureDistance(posterFeature, feature) <= MAX_SEASON_BACKDROP_DISTANCE
+            }
+            season.copy(backdropPath = match?.first ?: fallbackPath)
         }
     }
 
@@ -528,3 +553,5 @@ private fun String.cleanTmdbCredential(): String {
 private inline fun DoubleArray.mapInPlace(transform: (Double) -> Double) {
     indices.forEach { index -> this[index] = transform(this[index]) }
 }
+
+private const val MAX_SEASON_BACKDROP_DISTANCE = 0.18

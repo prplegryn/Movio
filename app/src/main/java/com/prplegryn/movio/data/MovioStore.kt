@@ -302,6 +302,6 @@ class MovioStore(context: Context) {
     }
 
     companion object {
-        private const val LIBRARY_SCHEMA_VERSION = 3
+        private const val LIBRARY_SCHEMA_VERSION = 4
     }
 }

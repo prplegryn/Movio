@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -97,14 +96,6 @@ class PlayerActivity : ComponentActivity() {
                     chromeVisible = false
                 }
             }
-            DisposableEffect(Unit) {
-                onDispose {
-                    saveProgress()
-                    mpvView?.shutdown()
-                    mpvView = null
-                }
-            }
-
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 if (url.isNotBlank()) {
                     AndroidView(
@@ -144,6 +135,12 @@ class PlayerActivity : ComponentActivity() {
                                     setBackgroundColor(android.graphics.Color.BLACK)
                                     visibility = View.VISIBLE
                                 }
+                            }
+                        },
+                        onRelease = { view ->
+                            if (view is MovioMpvView) {
+                                view.shutdown()
+                                if (mpvView === view) mpvView = null
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
@@ -238,6 +235,17 @@ class PlayerActivity : ComponentActivity() {
     override fun onStop() {
         saveProgress()
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        saveProgress()
+        releasePlayer()
+        super.onDestroy()
+    }
+
+    private fun releasePlayer() {
+        mpvView?.shutdown()
+        mpvView = null
     }
 
     private fun saveProgress() {

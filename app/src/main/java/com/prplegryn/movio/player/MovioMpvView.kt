@@ -2,7 +2,8 @@ package com.prplegryn.movio.player
 
 import android.content.Context
 import android.os.Build
-import `is`.xyz.mpv.BaseMPVView
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import `is`.xyz.mpv.MPV
 import `is`.xyz.mpv.MPVNode
 
@@ -24,40 +25,60 @@ interface MovioMpvListener {
 class MovioMpvView(
     context: Context,
     private val listener: MovioMpvListener,
-) : BaseMPVView(context, null), MPV.EventObserver, MPV.LogObserver {
+) : SurfaceView(context), SurfaceHolder.Callback, MPV.EventObserver, MPV.LogObserver {
+    private val mpv = MPV()
     private var startPositionMs = 0L
     private var durationMs = 0L
-    private var destroyed = false
+    private var released = false
+    private var surfaceAttached = false
+    private var pendingUrl = ""
     private var playbackStarted = false
 
     fun start(url: String, startMs: Long) {
         startPositionMs = startMs.coerceAtLeast(0L)
-        playFile(url)
+        pendingUrl = url
+        mpv.create(context)
         mpv.addObserver(this)
         mpv.addLogObserver(this)
-        initialize(context.filesDir.path, context.cacheDir.path)
+        configureMpv()
+        mpv.init()
+        mpv.setOptionString("force-window", "no")
+        mpv.setOptionString("idle", "once")
+        observeProperties()
+        holder.addCallback(this)
     }
 
     fun shutdown() {
-        if (destroyed) return
-        destroyed = true
+        if (released) return
+        released = true
+        holder.removeCallback(this)
         mpv.removeObserver(this)
         mpv.removeLogObserver(this)
-        if (mpv.isInitialized) destroy()
+        if (!mpv.isInitialized) return
+        runCatching { mpv.command("stop") }
+        detachSurface()
+        runCatching { mpv.destroy() }
     }
 
     fun togglePause() {
+        if (released || !mpv.isInitialized) return
         mpv.command("cycle", "pause")
     }
 
     fun seekTo(positionMs: Long) {
+        if (released || !mpv.isInitialized) return
         mpv.setPropertyDouble("time-pos", positionMs.coerceAtLeast(0L) / 1000.0)
     }
 
     fun currentPositionMs(): Long =
-        ((mpv.getPropertyDouble("time-pos") ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L)
+        if (released || !mpv.isInitialized) {
+            0L
+        } else {
+            ((mpv.getPropertyDouble("time-pos") ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L)
+        }
 
     fun setTrack(type: String, id: Int) {
+        if (released || !mpv.isInitialized) return
         val property = if (type == "audio") "aid" else "sid"
         if (id < 0) {
             mpv.setPropertyString(property, "no")
@@ -68,11 +89,50 @@ class MovioMpvView(
     }
 
     fun setFill(fill: Boolean) {
+        if (released || !mpv.isInitialized) return
         mpv.setPropertyDouble("panscan", if (fill) 1.0 else 0.0)
+        val safeSubtitlePosition = if (fill) 78.0 else 100.0
+        mpv.setPropertyDouble("sub-pos", safeSubtitlePosition)
+        mpv.setPropertyDouble("secondary-sub-pos", safeSubtitlePosition)
     }
 
-    override fun initOptions() {
-        setVo("gpu-next")
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        if (released || !mpv.isInitialized || surfaceAttached) return
+        mpv.attachSurface(holder.surface)
+        surfaceAttached = true
+        mpv.setOptionString("force-window", "yes")
+        if (pendingUrl.isNotBlank()) {
+            mpv.command("loadfile", pendingUrl)
+            pendingUrl = ""
+        } else {
+            mpv.setPropertyString("vo", "gpu-next")
+        }
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        if (!released && mpv.isInitialized) {
+            mpv.setPropertyString("android-surface-size", "${width}x$height")
+        }
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        detachSurface()
+    }
+
+    private fun detachSurface() {
+        if (!surfaceAttached || !mpv.isInitialized) return
+        runCatching { mpv.setPropertyString("vo", "null") }
+        runCatching { mpv.setPropertyString("force-window", "no") }
+        runCatching { mpv.detachSurface() }
+        surfaceAttached = false
+    }
+
+    private fun configureMpv() {
+        mpv.setOptionString("config", "yes")
+        mpv.setOptionString("config-dir", context.filesDir.path)
+        mpv.setOptionString("gpu-shader-cache-dir", context.cacheDir.path)
+        mpv.setOptionString("icc-cache-dir", context.cacheDir.path)
+        mpv.setOptionString("vo", "gpu-next")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("gpu-context", "android")
         mpv.setOptionString("opengl-es", "yes")
@@ -94,18 +154,16 @@ class MovioMpvView(
         mpv.setOptionString("sub-ass-override", "no")
         mpv.setOptionString("sub-use-margins", "yes")
         mpv.setOptionString("sub-ass-force-margins", "yes")
+        mpv.setOptionString("blend-subtitles", "no")
         mpv.setOptionString("sub-font-size", "38")
         mpv.setOptionString("sub-border-size", "2")
         mpv.setOptionString("target-colorspace-hint", "yes")
         mpv.setOptionString("input-default-bindings", "no")
         mpv.setOptionString("keep-open", "yes")
-    }
-
-    override fun postInitOptions() {
         mpv.setOptionString("save-position-on-quit", "no")
     }
 
-    override fun observeProperties() {
+    private fun observeProperties() {
         mpv.observeProperty("time-pos", MPV.mpvFormat.MPV_FORMAT_DOUBLE)
         mpv.observeProperty("duration/full", MPV.mpvFormat.MPV_FORMAT_DOUBLE)
         mpv.observeProperty("pause", MPV.mpvFormat.MPV_FORMAT_FLAG)
