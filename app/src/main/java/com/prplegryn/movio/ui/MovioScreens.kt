@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -276,6 +277,10 @@ fun MediaDetailOverlay(
                 },
             )
         }
+        item { DetailSummary(group) }
+        if (group.tmdb?.cast?.isNotEmpty() == true) {
+            item { CastSection(group, controller) }
+        }
 
         when (group.kind) {
             MediaKind.Tv,
@@ -287,6 +292,12 @@ fun MediaDetailOverlay(
                         onSelected = { selectedSeason = it },
                     )
                 }
+                group.seasons.firstOrNull { it.seasonNumber == selectedSeason }
+                    ?.overview
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { overview ->
+                        item { SeasonOverview(selectedSeason, overview) }
+                    }
                 items(group.episodes.filter { (it.parsed.seasonNumber ?: 1) == selectedSeason }) { episode ->
                     EpisodeRow(
                         episode = episode,
@@ -373,56 +384,122 @@ private fun DetailHero(
     val context = androidx.compose.ui.platform.LocalContext.current
     val seasonPoster = group.seasons.firstOrNull { it.seasonNumber == selectedSeason }?.posterPath.orEmpty()
     val poster = seasonPoster.ifBlank { group.primaryPosterPath }
-    val seasonStill = group.episodes
-        .firstOrNull { (it.parsed.seasonNumber ?: 1) == selectedSeason && it.tmdb?.stillPath?.isNotBlank() == true }
-        ?.tmdb
-        ?.stillPath
-        .orEmpty()
-    val heroImage = when (group.kind) {
-        MediaKind.Movie -> group.primaryBackdropPath.ifBlank { group.primaryPosterPath }
-        MediaKind.Tv,
-        MediaKind.Anime -> seasonStill.ifBlank { group.primaryBackdropPath }
-        MediaKind.Unknown -> group.primaryBackdropPath
-    }
+    val heroImage = group.primaryBackdropPath
     Box(
         Modifier
             .fillMaxWidth()
-            .height(360.dp)
-            .background(Color(0xFFE6E0D5)),
+            .height(430.dp)
+            .background(Color(0xFF22262B)),
     ) {
         AsyncImage(
-            model = controller.imageUrl(heroImage, "w780"),
+            model = controller.imageUrl(heroImage, "w1280"),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
         )
         Box(
             Modifier
                 .fillMaxSize()
-                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.15f), Color(0xFFF6F2EA)), startY = 100f))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Black.copy(alpha = 0.12f),
+                            Color.Black.copy(alpha = 0.2f),
+                            Color(0xFFF6F2EA),
+                        ),
+                        startY = 70f,
+                    )
+                )
         )
         ActionIcon("×", Modifier.statusBarsPadding().padding(18.dp).align(Alignment.TopStart), onClose)
         Row(
             Modifier
                 .align(Alignment.BottomStart)
-                .padding(20.dp),
+                .padding(horizontal = 20.dp, vertical = 18.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
             PosterImage(
                 url = controller.imageUrl(poster, "w342"),
                 modifier = Modifier
-                    .width(112.dp)
+                    .width(118.dp)
                     .aspectRatio(2f / 3f),
             )
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                BasicText(group.displayTitle, maxLines = 2, overflow = TextOverflow.Ellipsis, style = TextStyle(Ink, 26.sp, FontWeight.Bold))
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 BasicText(
-                    group.tmdb?.overview?.ifBlank { "暂无简介" } ?: "暂无简介",
-                    maxLines = 3,
+                    group.displayTitle,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    style = TextStyle(Muted, 14.sp),
+                    style = TextStyle(Ink, 28.sp, FontWeight.Bold),
                 )
-                ActionChip("播放", Modifier.width(96.dp)) { onPlay(context) }
+                group.tmdb?.originalTitle
+                    ?.takeIf { it.isNotBlank() && it != group.displayTitle }
+                    ?.let {
+                        BasicText(it, maxLines = 1, overflow = TextOverflow.Ellipsis, style = TextStyle(Muted, 13.sp))
+                    }
+                BasicText(group.detailMetadata(), style = TextStyle(Color(0xFF3F444A), 13.sp, FontWeight.SemiBold))
+                ActionChip("播放", Modifier.width(104.dp)) { onPlay(context) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailSummary(group: MediaGroup) {
+    val tmdb = group.tmdb
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        tmdb?.tagline?.takeIf { it.isNotBlank() }?.let {
+            BasicText("“$it”", style = TextStyle(Color(0xFF3F454B), 16.sp, FontWeight.SemiBold))
+        }
+        BasicText("剧情简介", style = TextStyle(Ink, 20.sp, FontWeight.Bold))
+        BasicText(
+            tmdb?.overview?.ifBlank { "暂无简介" } ?: "暂无简介",
+            style = TextStyle(Muted, 14.sp),
+        )
+    }
+}
+
+@Composable
+private fun CastSection(group: MediaGroup, controller: MovioController) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        BasicText(
+            "演员",
+            style = TextStyle(Ink, 20.sp, FontWeight.Bold),
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(group.tmdb?.cast.orEmpty()) { person ->
+                Column(
+                    Modifier.width(92.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    PosterImage(
+                        url = controller.imageUrl(person.profilePath, "w185"),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(2f / 3f),
+                    )
+                    BasicText(
+                        person.name,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = TextStyle(Ink, 13.sp, FontWeight.Bold),
+                    )
+                    BasicText(
+                        person.character.ifBlank { "演员" },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = TextStyle(Muted, 11.sp),
+                    )
+                }
             }
         }
     }
@@ -454,6 +531,19 @@ private fun SeasonTabs(group: MediaGroup, selectedSeason: Int, onSelected: (Int)
                 BasicText(season.name, style = TextStyle(if (selected) Color.White else Ink, 14.sp, FontWeight.SemiBold))
             }
         }
+    }
+}
+
+@Composable
+private fun SeasonOverview(seasonNumber: Int, overview: String) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        BasicText("第 $seasonNumber 季", style = TextStyle(Ink, 18.sp, FontWeight.Bold))
+        BasicText(overview, style = TextStyle(Muted, 13.sp), maxLines = 4, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -607,7 +697,12 @@ private fun PosterImage(url: String, modifier: Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         if (url.isNotBlank()) {
-            AsyncImage(model = url, contentDescription = null, modifier = Modifier.fillMaxSize())
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
         } else {
             BasicText("Movio", style = TextStyle(Muted, 13.sp, FontWeight.Bold))
         }
@@ -850,3 +945,31 @@ private fun MediaGroup.subtitle(): String =
         MediaKind.Anime -> "${episodes.size} 集"
         MediaKind.Unknown -> "${unmatchedFiles.size} 个未匹配文件"
     }
+
+private fun MediaGroup.detailMetadata(): String {
+    val values = mutableListOf<String>()
+    tmdb?.releaseDate
+        ?.take(4)
+        ?.takeIf { year -> year.all { it.isDigit() } }
+        ?.let(values::add)
+    tmdb?.voteAverage
+        ?.takeIf { it > 0.0 }
+        ?.let { values += "TMDb %.1f".format(it) }
+    tmdb?.runtime
+        ?.takeIf { it > 0 }
+        ?.let { values += "$it 分钟" }
+    tmdb?.genres
+        ?.take(2)
+        ?.takeIf { it.isNotEmpty() }
+        ?.joinToString(" / ")
+        ?.let(values::add)
+    if (values.isEmpty()) {
+        values += when (kind) {
+            MediaKind.Movie -> "电影"
+            MediaKind.Tv -> "电视剧"
+            MediaKind.Anime -> "动漫"
+            MediaKind.Unknown -> "未匹配"
+        }
+    }
+    return values.joinToString("  ·  ")
+}

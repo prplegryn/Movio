@@ -70,17 +70,22 @@ class TmdbService(
         val detailed = ignoreMissing(hit) {
             val urlBuilder = "https://api.themoviedb.org/3/movie/${hit.id}".toHttpUrl().newBuilder()
                 .addQueryParameter("language", "zh-CN")
+                .addQueryParameter("append_to_response", "credits")
             applyKey(urlBuilder)
             val json = getJson(urlBuilder.build().toString())
             hit.copy(
                 title = json.optString("title", hit.title),
                 originalTitle = json.optString("original_title", hit.originalTitle),
+                tagline = json.optString("tagline", hit.tagline),
                 overview = json.optString("overview", hit.overview),
                 posterPath = json.optString("poster_path", hit.posterPath),
                 backdropPath = json.optString("backdrop_path", hit.backdropPath),
                 releaseDate = json.optString("release_date", hit.releaseDate),
                 voteAverage = json.optDouble("vote_average", hit.voteAverage),
+                runtime = json.optInt("runtime", hit.runtime),
                 genreIds = parseGenreIds(json).ifEmpty { hit.genreIds },
+                genres = parseGenres(json).ifEmpty { hit.genres },
+                cast = parseCast(json).ifEmpty { hit.cast },
             )
         }
         movieDetailsCache[hit.id] = detailed
@@ -93,18 +98,23 @@ class TmdbService(
         val detailed = ignoreMissing(hit to emptyList()) {
             val urlBuilder = "https://api.themoviedb.org/3/tv/${hit.id}".toHttpUrl().newBuilder()
                 .addQueryParameter("language", "zh-CN")
+                .addQueryParameter("append_to_response", "credits")
             applyKey(urlBuilder)
             val json = getJson(urlBuilder.build().toString())
             val seasons = json.optJSONArray("seasons") ?: JSONArray()
             hit.copy(
                 title = json.optString("name", hit.title),
                 originalTitle = json.optString("original_name", hit.originalTitle),
+                tagline = json.optString("tagline", hit.tagline),
                 overview = json.optString("overview", hit.overview),
                 posterPath = json.optString("poster_path", hit.posterPath),
                 backdropPath = json.optString("backdrop_path", hit.backdropPath),
                 releaseDate = json.optString("first_air_date", hit.releaseDate),
                 voteAverage = json.optDouble("vote_average", hit.voteAverage),
+                runtime = parseTvRuntime(json).takeIf { it > 0 } ?: hit.runtime,
                 genreIds = parseGenreIds(json).ifEmpty { hit.genreIds },
+                genres = parseGenres(json).ifEmpty { hit.genres },
+                cast = parseCast(json).ifEmpty { hit.cast },
             ) to (0 until seasons.length()).mapNotNull { parseSeason(seasons.optJSONObject(it)) }
                 .filter { it.seasonNumber > 0 }
         }
@@ -238,6 +248,37 @@ class TmdbService(
         return (0 until genres.length()).mapNotNull { index ->
             genres.optJSONObject(index)?.optInt("id")?.takeIf { it > 0 }
         }
+    }
+
+    private fun parseGenres(json: JSONObject): List<String> {
+        val genres = json.optJSONArray("genres") ?: return emptyList()
+        return (0 until genres.length()).mapNotNull { index ->
+            genres.optJSONObject(index)?.optString("name")?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    private fun parseCast(json: JSONObject): List<TmdbCastMember> {
+        val cast = json.optJSONObject("credits")?.optJSONArray("cast") ?: return emptyList()
+        return (0 until cast.length()).mapNotNull { index ->
+            val person = cast.optJSONObject(index) ?: return@mapNotNull null
+            val id = person.optInt("id")
+            val name = person.optString("name")
+            if (id <= 0 || name.isBlank()) return@mapNotNull null
+            TmdbCastMember(
+                id = id,
+                name = name,
+                character = person.optString("character"),
+                profilePath = person.optString("profile_path"),
+            )
+        }.take(20)
+    }
+
+    private fun parseTvRuntime(json: JSONObject): Int {
+        val runtimes = json.optJSONArray("episode_run_time") ?: return 0
+        return (0 until runtimes.length())
+            .map { runtimes.optInt(it) }
+            .firstOrNull { it > 0 }
+            ?: 0
     }
 
     private fun parseSeason(json: JSONObject?): TmdbSeason? {

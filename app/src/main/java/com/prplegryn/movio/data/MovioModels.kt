@@ -52,12 +52,23 @@ data class TmdbSearchHit(
     val kind: MediaKind,
     val title: String,
     val originalTitle: String = "",
+    val tagline: String = "",
     val overview: String = "",
     val posterPath: String = "",
     val backdropPath: String = "",
     val releaseDate: String = "",
     val voteAverage: Double = 0.0,
+    val runtime: Int = 0,
     val genreIds: List<Int> = emptyList(),
+    val genres: List<String> = emptyList(),
+    val cast: List<TmdbCastMember> = emptyList(),
+)
+
+data class TmdbCastMember(
+    val id: Int,
+    val name: String,
+    val character: String = "",
+    val profilePath: String = "",
 )
 
 data class TmdbSeason(
@@ -104,10 +115,3 @@ data class MediaGroup(
     val isAnimation: Boolean
         get() = kind == MediaKind.Anime || (kind == MediaKind.Tv && tmdb?.genreIds?.contains(16) == true)
 }
-
-data class SubtitleTrackInfo(
-    val index: Int,
-    val label: String,
-    val language: String,
-    val selected: Boolean,
-)

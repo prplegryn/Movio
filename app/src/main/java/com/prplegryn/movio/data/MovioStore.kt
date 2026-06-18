@@ -49,6 +49,7 @@ class MovioStore(context: Context) {
         return runCatching {
             val json = JSONObject(raw)
             if (json.optString("fingerprint") != fingerprint) return null
+            if (json.optInt("schemaVersion") != LIBRARY_SCHEMA_VERSION) return null
             val groups = json.optJSONArray("groups") ?: return null
             (0 until groups.length())
                 .mapNotNull { groups.optJSONObject(it)?.toMediaGroup() }
@@ -70,6 +71,7 @@ class MovioStore(context: Context) {
     fun saveLibraryCache(rootId: String, fingerprint: String, groups: List<MediaGroup>) {
         val json = JSONObject()
             .put("fingerprint", fingerprint)
+            .put("schemaVersion", LIBRARY_SCHEMA_VERSION)
             .put(
                 "groups",
                 JSONArray().also { array ->
@@ -171,12 +173,16 @@ class MovioStore(context: Context) {
             .put("kind", kind.name)
             .put("title", title)
             .put("originalTitle", originalTitle)
+            .put("tagline", tagline)
             .put("overview", overview)
             .put("posterPath", posterPath)
             .put("backdropPath", backdropPath)
             .put("releaseDate", releaseDate)
             .put("voteAverage", voteAverage)
+            .put("runtime", runtime)
             .put("genreIds", JSONArray().also { array -> genreIds.forEach { array.put(it) } })
+            .put("genres", JSONArray().also { array -> genres.forEach { array.put(it) } })
+            .putArray("cast", cast) { it.toJson() }
 
     private fun JSONObject.toTmdbSearchHit(): TmdbSearchHit =
         TmdbSearchHit(
@@ -184,12 +190,31 @@ class MovioStore(context: Context) {
             kind = optMediaKind("kind"),
             title = optString("title"),
             originalTitle = optString("originalTitle"),
+            tagline = optString("tagline"),
             overview = optString("overview"),
             posterPath = optString("posterPath"),
             backdropPath = optString("backdropPath"),
             releaseDate = optString("releaseDate"),
             voteAverage = optDouble("voteAverage"),
+            runtime = optInt("runtime"),
             genreIds = optIntArray("genreIds"),
+            genres = optStringArray("genres"),
+            cast = optJsonArray("cast") { it.toTmdbCastMember() },
+        )
+
+    private fun TmdbCastMember.toJson(): JSONObject =
+        JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("character", character)
+            .put("profilePath", profilePath)
+
+    private fun JSONObject.toTmdbCastMember(): TmdbCastMember =
+        TmdbCastMember(
+            id = optInt("id"),
+            name = optString("name"),
+            character = optString("character"),
+            profilePath = optString("profilePath"),
         )
 
     private fun TmdbSeason.toJson(): JSONObject =
@@ -272,5 +297,9 @@ class MovioStore(context: Context) {
         return (0 until array.length()).mapNotNull { index ->
             array.optJSONObject(index)?.let(mapper)
         }
+    }
+
+    companion object {
+        private const val LIBRARY_SCHEMA_VERSION = 2
     }
 }

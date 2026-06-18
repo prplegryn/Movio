@@ -85,13 +85,16 @@ private fun List<MediaGroup>.imageTargets(): List<ImageTarget> {
     forEach { group ->
         group.tmdb?.let { hit ->
             add(hit.posterPath, "w185", "w342")
-            add(hit.backdropPath, "w500", "w780")
+            add(hit.backdropPath, "w500", "w780", "w1280")
+            hit.cast.forEach { person ->
+                add(person.profilePath, "w185")
+            }
         }
         group.seasons.forEach { season ->
             add(season.posterPath, "w342", "w780")
         }
         group.episodes.forEach { episode ->
-            add(episode.tmdb?.stillPath.orEmpty(), "w300", "w780")
+            add(episode.tmdb?.stillPath.orEmpty(), "w300")
         }
     }
     return targets.distinct()
