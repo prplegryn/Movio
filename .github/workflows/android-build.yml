@@ -42,6 +42,18 @@ jobs:
       - name: Assemble signed release APK
         run: gradle :app:assembleRelease --no-daemon --stacktrace
 
+      - name: Verify arm64-only APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(find app/build/outputs/apk/release -name '*.apk' -print -quit)"
+          entries="$(unzip -Z1 "$apk")"
+          grep -q '^lib/arm64-v8a/' <<<"$entries"
+          if grep -Eq '^lib/(armeabi-v7a|x86|x86_64)/' <<<"$entries"; then
+            echo "Unexpected non-arm64 native libraries found in $apk"
+            exit 1
+          fi
+
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
