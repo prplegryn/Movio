@@ -46,6 +46,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -129,6 +130,9 @@ private val Accent = Color(0xFF2F80ED)
 private fun MovioApp() {
     val context = LocalContext.current
     val controller = remember { MovioController(context) }
+    DisposableEffect(controller) {
+        onDispose(controller::close)
+    }
     var destination by remember { mutableStateOf(Destination.Play) }
     var searchOpen by remember { mutableStateOf(false) }
     val backdrop = rememberLayerBackdrop {

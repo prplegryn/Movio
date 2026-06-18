@@ -65,7 +65,6 @@ fun MovioLibraryPage(
     controller: MovioController,
     onOpen: (MediaGroup) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     val anime = controller.library.filter { it.isAnimation }
     val movies = controller.library.filter { it.kind == MediaKind.Movie && it.tmdb != null && !it.isAnimation }
     val tvShows = controller.library.filter { it.kind == MediaKind.Tv && it.tmdb != null && !it.isAnimation }
@@ -81,7 +80,7 @@ fun MovioLibraryPage(
             PageHeader(
                 title = "资源库",
                 action = if (controller.loading) "同步 ${controller.syncProgressPercent.coerceIn(0, 100)}%" else "同步",
-                onAction = { scope.launch { controller.refreshLibrary() } },
+                onAction = controller::refreshLibrary,
             )
         }
         item { SyncProgressPanel(controller) }
@@ -219,7 +218,7 @@ fun MovioMinePage(controller: MovioController) {
                         Modifier.weight(1f),
                     ) {
                         controller.updateTmdbToken(tmdbToken)
-                        scope.launch { controller.refreshLibrary() }
+                        controller.refreshLibrary()
                     }
                 }
                 SyncProgressPanel(controller)
@@ -384,11 +383,7 @@ private fun DetailHero(
     val context = androidx.compose.ui.platform.LocalContext.current
     val seasonPoster = group.seasons.firstOrNull { it.seasonNumber == selectedSeason }?.posterPath.orEmpty()
     val poster = seasonPoster.ifBlank { group.primaryPosterPath }
-    val heroImage = group.seasons
-        .firstOrNull { it.seasonNumber == selectedSeason }
-        ?.backdropPath
-        .orEmpty()
-        .ifBlank { group.primaryBackdropPath }
+    val heroImage = group.primaryBackdropPath
     Box(
         Modifier
             .fillMaxWidth()

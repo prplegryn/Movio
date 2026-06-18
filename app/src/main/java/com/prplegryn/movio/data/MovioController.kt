@@ -7,13 +7,21 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.prplegryn.movio.player.PlayerActivity
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MovioController(context: Context) {
     private val appContext = context.applicationContext
     private val store = MovioStore(appContext)
     private val imageCache = ImageCache(appContext)
+    private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var librarySyncJob: Job? = null
 
     var settings by mutableStateOf(store.loadSettings())
         private set
@@ -141,7 +149,14 @@ class MovioController(context: Context) {
         rootFolders = rootOptions(folders)
     }
 
-    suspend fun refreshLibrary() {
+    fun refreshLibrary() {
+        if (librarySyncJob?.isActive == true) return
+        librarySyncJob = controllerScope.launch {
+            refreshLibraryNow()
+        }
+    }
+
+    private suspend fun refreshLibraryNow() {
         if (!loggedIn) {
             message = "请先登录光鸭"
             return
@@ -174,6 +189,10 @@ class MovioController(context: Context) {
         library = updated
         syncProgressPercent = 100
         syncProgressLabel = "同步完成"
+    }
+
+    fun close() {
+        controllerScope.cancel()
     }
 
     fun openDetail(group: MediaGroup) {
@@ -241,6 +260,8 @@ class MovioController(context: Context) {
                 message = successMessage
             }
             result
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
             message = "$failurePrefix：${t.message ?: "未知错误"}"
             null
