@@ -2,7 +2,9 @@ package com.prplegryn.movio.player
 
 import android.media.AudioManager
 import android.os.Bundle
+import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -107,33 +109,41 @@ class PlayerActivity : ComponentActivity() {
                 if (url.isNotBlank()) {
                     AndroidView(
                         factory = { context ->
-                            MovioMpvView(
-                                context = context,
-                                listener = object : MovioMpvListener {
-                                    override fun onPosition(positionMsValue: Long, durationMsValue: Long) {
-                                        positionMs = positionMsValue
-                                        durationMs = durationMsValue
-                                    }
+                            runCatching {
+                                MovioMpvView(
+                                    context = context,
+                                    listener = object : MovioMpvListener {
+                                        override fun onPosition(positionMsValue: Long, durationMsValue: Long) {
+                                            positionMs = positionMsValue
+                                            durationMs = durationMsValue
+                                        }
 
-                                    override fun onPauseChanged(pausedValue: Boolean) {
-                                        paused = pausedValue
-                                    }
+                                        override fun onPauseChanged(pausedValue: Boolean) {
+                                            paused = pausedValue
+                                        }
 
-                                    override fun onTracksChanged(updatedTracks: List<MpvTrack>) {
-                                        tracks = updatedTracks
-                                    }
+                                        override fun onTracksChanged(updatedTracks: List<MpvTrack>) {
+                                            tracks = updatedTracks
+                                        }
 
-                                    override fun onDynamicRangeChanged(updatedBadges: List<String>) {
-                                        badges = updatedBadges
-                                    }
+                                        override fun onDynamicRangeChanged(updatedBadges: List<String>) {
+                                            badges = updatedBadges
+                                        }
 
-                                    override fun onPlaybackError(message: String) {
-                                        playerError = message
-                                    }
-                                },
-                            ).also { view ->
-                                mpvView = view
-                                view.start(url, startMs)
+                                        override fun onPlaybackError(message: String) {
+                                            playerError = message
+                                        }
+                                    },
+                                ).also { view ->
+                                    mpvView = view
+                                    view.start(url, startMs)
+                                }
+                            }.getOrElse { error ->
+                                playerError = "播放器初始化失败：${error.message ?: error.javaClass.simpleName}"
+                                FrameLayout(context).apply {
+                                    setBackgroundColor(android.graphics.Color.BLACK)
+                                    visibility = View.VISIBLE
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxSize(),

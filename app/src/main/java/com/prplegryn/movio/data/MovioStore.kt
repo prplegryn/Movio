@@ -222,6 +222,7 @@ class MovioStore(context: Context) {
             .put("seasonNumber", seasonNumber)
             .put("name", name)
             .put("posterPath", posterPath)
+            .put("backdropPath", backdropPath)
             .put("overview", overview)
 
     private fun JSONObject.toTmdbSeason(): TmdbSeason =
@@ -229,6 +230,7 @@ class MovioStore(context: Context) {
             seasonNumber = optInt("seasonNumber"),
             name = optString("name"),
             posterPath = optString("posterPath"),
+            backdropPath = optString("backdropPath"),
             overview = optString("overview"),
         )
 
@@ -300,6 +302,6 @@ class MovioStore(context: Context) {
     }
 
     companion object {
-        private const val LIBRARY_SCHEMA_VERSION = 2
+        private const val LIBRARY_SCHEMA_VERSION = 3
     }
 }

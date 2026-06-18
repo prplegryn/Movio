@@ -384,7 +384,11 @@ private fun DetailHero(
     val context = androidx.compose.ui.platform.LocalContext.current
     val seasonPoster = group.seasons.firstOrNull { it.seasonNumber == selectedSeason }?.posterPath.orEmpty()
     val poster = seasonPoster.ifBlank { group.primaryPosterPath }
-    val heroImage = group.primaryBackdropPath
+    val heroImage = group.seasons
+        .firstOrNull { it.seasonNumber == selectedSeason }
+        ?.backdropPath
+        .orEmpty()
+        .ifBlank { group.primaryBackdropPath }
     Box(
         Modifier
             .fillMaxWidth()

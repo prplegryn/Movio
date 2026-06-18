@@ -1,5 +1,7 @@
 package com.prplegryn.movio.data
 
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -101,8 +103,7 @@ class TmdbService(
                 .addQueryParameter("append_to_response", "credits")
             applyKey(urlBuilder)
             val json = getJson(urlBuilder.build().toString())
-            val seasons = json.optJSONArray("seasons") ?: JSONArray()
-            hit.copy(
+            val detailedHit = hit.copy(
                 title = json.optString("name", hit.title),
                 originalTitle = json.optString("original_name", hit.originalTitle),
                 tagline = json.optString("tagline", hit.tagline),
@@ -115,8 +116,16 @@ class TmdbService(
                 genreIds = parseGenreIds(json).ifEmpty { hit.genreIds },
                 genres = parseGenres(json).ifEmpty { hit.genres },
                 cast = parseCast(json).ifEmpty { hit.cast },
-            ) to (0 until seasons.length()).mapNotNull { parseSeason(seasons.optJSONObject(it)) }
+            )
+            val seasonsJson = json.optJSONArray("seasons") ?: JSONArray()
+            val seasons = (0 until seasonsJson.length())
+                .mapNotNull { parseSeason(seasonsJson.optJSONObject(it)) }
                 .filter { it.seasonNumber > 0 }
+            detailedHit to assignSeasonBackdrops(
+                seriesId = hit.id,
+                seasons = seasons,
+                fallbackPath = detailedHit.backdropPath,
+            )
         }
         tvDetailsCache[hit.id] = detailed
         return detailed
@@ -281,6 +290,86 @@ class TmdbService(
             ?: 0
     }
 
+    private fun assignSeasonBackdrops(
+        seriesId: Int,
+        seasons: List<TmdbSeason>,
+        fallbackPath: String,
+    ): List<TmdbSeason> {
+        if (seasons.isEmpty()) return seasons
+        val candidates = runCatching {
+            val urlBuilder = "https://api.themoviedb.org/3/tv/$seriesId/images".toHttpUrl().newBuilder()
+                .addQueryParameter("include_image_language", "zh,en,null")
+            applyKey(urlBuilder)
+            val images = getJson(urlBuilder.build().toString()).optJSONArray("backdrops") ?: JSONArray()
+            (0 until images.length())
+                .mapNotNull { images.optJSONObject(it)?.optString("file_path")?.takeIf(String::isNotBlank) }
+                .distinct()
+                .take((seasons.size * 5).coerceIn(12, 30))
+        }.getOrDefault(emptyList())
+        if (candidates.isEmpty()) {
+            return seasons.map { it.copy(backdropPath = fallbackPath) }
+        }
+
+        val candidateFeatures = candidates.mapNotNull { path ->
+            imageFeature(path, "w300")?.let { feature -> path to feature }
+        }
+        if (candidateFeatures.isEmpty()) {
+            return seasons.mapIndexed { index, season ->
+                season.copy(backdropPath = candidates.getOrNull(index) ?: fallbackPath)
+            }
+        }
+
+        val unused = candidateFeatures.toMutableList()
+        return seasons.map { season ->
+            val posterFeature = imageFeature(season.posterPath, "w185")
+            val selected = if (posterFeature == null) {
+                unused.firstOrNull()
+            } else {
+                unused.minByOrNull { (_, feature) -> featureDistance(posterFeature, feature) }
+            }
+            if (selected != null) unused.remove(selected)
+            season.copy(backdropPath = selected?.first ?: fallbackPath)
+        }
+    }
+
+    private fun imageFeature(path: String, size: String): DoubleArray? {
+        if (path.isBlank()) return null
+        val request = Request.Builder()
+            .url("https://image.tmdb.org/t/p/$size$path")
+            .get()
+            .build()
+        return runCatching {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val bitmap = response.body.byteStream().use(BitmapFactory::decodeStream) ?: return null
+                val feature = DoubleArray(20)
+                val hsv = FloatArray(3)
+                val step = (maxOf(bitmap.width, bitmap.height) / 48).coerceAtLeast(1)
+                var samples = 0
+                for (y in 0 until bitmap.height step step) {
+                    for (x in 0 until bitmap.width step step) {
+                        Color.colorToHSV(bitmap.getPixel(x, y), hsv)
+                        val saturation = hsv[1].toDouble()
+                        feature[(hsv[0] / 30f).toInt().coerceIn(0, 11)] += 0.25 + saturation
+                        feature[12 + (hsv[1] * 4f).toInt().coerceIn(0, 3)] += 1.0
+                        feature[16 + (hsv[2] * 4f).toInt().coerceIn(0, 3)] += 1.0
+                        samples += 1
+                    }
+                }
+                bitmap.recycle()
+                if (samples == 0) return null
+                feature.mapInPlace { it / samples.toDouble() }
+                feature
+            }
+        }.getOrNull()
+    }
+
+    private fun featureDistance(left: DoubleArray, right: DoubleArray): Double =
+        left.indices.sumOf { index ->
+            val difference = left[index] - right[index]
+            difference * difference
+        }
+
     private fun parseSeason(json: JSONObject?): TmdbSeason? {
         if (json == null) return null
         return TmdbSeason(
@@ -434,4 +523,8 @@ private fun String.cleanTmdbCredential(): String {
         .trim()
         .trim('"', '\'')
         .replace(Regex("\\s+"), "")
+}
+
+private inline fun DoubleArray.mapInPlace(transform: (Double) -> Double) {
+    indices.forEach { index -> this[index] = transform(this[index]) }
 }
